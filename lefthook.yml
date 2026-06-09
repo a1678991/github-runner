@@ -3,25 +3,25 @@ pre-commit:
   jobs:
     - name: go-fmt
       glob: "*.go"
-      run: golangci-lint fmt {staged_files}
+      run: mise exec -- golangci-lint fmt {staged_files}
       stage_fixed: true
     - name: go-lint
       glob: "*.go"
-      run: golangci-lint run
+      run: mise exec -- golangci-lint run
     - name: shfmt
       glob: "*.sh"
-      run: shfmt -w {staged_files}
+      run: mise exec -- shfmt -w {staged_files}
       stage_fixed: true
     - name: shellcheck
       glob: "*.sh"
-      run: shellcheck {staged_files}
+      run: mise exec -- shellcheck {staged_files}
     - name: actionlint
       glob: ".github/workflows/*.{yml,yaml}"
       run: mise exec -- actionlint
     - name: secretlint
-      run: npx secretlint --maskSecrets {staged_files}
+      run: mise exec -- npx secretlint --maskSecrets {staged_files}
 
 commit-msg:
   jobs:
     - name: commitlint
-      run: npx commitlint --edit {1}
+      run: mise exec -- npx commitlint --edit {1}
