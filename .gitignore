@@ -1,0 +1,10 @@
+# binaries
+/github-qemu-runner
+/dist/
+
+# npm
+node_modules/
+
+# editor / OS
+*.swp
+.DS_Store
