@@ -17,7 +17,7 @@ pre-commit:
       run: shellcheck {staged_files}
     - name: actionlint
       glob: ".github/workflows/*.{yml,yaml}"
-      run: actionlint
+      run: mise exec -- actionlint
     - name: secretlint
       run: npx secretlint --maskSecrets {staged_files}
 
