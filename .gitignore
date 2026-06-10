@@ -2,6 +2,8 @@
 /github-qemu-runner
 /dist/
 *.test
+/result
+/result-*
 
 # test artifacts
 coverage.out
