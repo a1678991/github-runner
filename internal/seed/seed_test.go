@@ -71,6 +71,9 @@ func TestBuildISO(t *testing.T) {
 	if fi.Size() == 0 {
 		t.Error("seed.iso is empty")
 	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("seed.iso mode = %o, want 0600", fi.Mode().Perm())
+	}
 	// the source files must exist alongside (genisoimage read them)
 	for _, f := range []string{"user-data", "meta-data"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {

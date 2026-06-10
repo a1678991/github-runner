@@ -56,5 +56,9 @@ func BuildISO(ctx context.Context, dir, userData, metaData string) (string, erro
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("genisoimage: %v: %s", err, out)
 	}
+	// The ISO carries the JIT config; match user-data's 0600.
+	if err := os.Chmod(iso, 0o600); err != nil {
+		return "", err
+	}
 	return iso, nil
 }
