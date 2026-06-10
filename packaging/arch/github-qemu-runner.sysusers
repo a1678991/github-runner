@@ -1,0 +1,2 @@
+u gh-runner - "GitHub Actions QEMU runner" /var/lib/github-qemu-runner
+m gh-runner kvm

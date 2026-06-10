@@ -1,0 +1,59 @@
+# Maintainer: a1678991 <a1678991@iroserver.net>
+pkgname=github-qemu-runner-git
+pkgver=r27.0000000
+pkgrel=1
+pkgdesc='Ephemeral GitHub Actions self-hosted runners in disposable QEMU/KVM VMs'
+arch=('x86_64')
+url='https://github.com/a1678991/github-qemu-runner'
+license=('MIT')
+depends=('qemu-base' 'cdrtools')
+makedepends=('git' 'go')
+provides=('github-qemu-runner')
+conflicts=('github-qemu-runner')
+# Go binaries gain nothing from Arch's split debug packages (broken
+# .build-id symlinks with -trimpath) or LTO flags.
+options=('!debug' '!lto')
+source=("$pkgname::git+https://github.com/a1678991/github-qemu-runner.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$pkgname"
+  export GOPATH="$srcdir/gopath"
+  export CGO_CPPFLAGS="${CPPFLAGS}"
+  export CGO_CFLAGS="${CFLAGS}"
+  export CGO_CXXFLAGS="${CXXFLAGS}"
+  export CGO_LDFLAGS="${LDFLAGS}"
+  export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+  go build -o github-qemu-runner ./cmd/github-qemu-runner
+}
+
+check() {
+  cd "$pkgname"
+  export GOPATH="$srcdir/gopath"
+  export GOFLAGS="-mod=readonly -modcacherw"
+  go test ./...
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 github-qemu-runner "$pkgdir/usr/bin/github-qemu-runner"
+  install -Dm644 packaging/github-qemu-runner.service \
+    "$pkgdir/usr/lib/systemd/system/github-qemu-runner.service"
+  # The shared unit targets the manual-install path (/usr/local/bin); the
+  # packaged binary lives in /usr/bin.
+  sed -i 's|/usr/local/bin/github-qemu-runner|/usr/bin/github-qemu-runner|' \
+    "$pkgdir/usr/lib/systemd/system/github-qemu-runner.service"
+  install -Dm644 packaging/config.example.yaml \
+    "$pkgdir/etc/github-qemu-runner/config.example.yaml"
+  install -Dm644 packaging/arch/github-qemu-runner.sysusers \
+    "$pkgdir/usr/lib/sysusers.d/github-qemu-runner.conf"
+  install -Dm644 packaging/arch/github-qemu-runner.tmpfiles \
+    "$pkgdir/usr/lib/tmpfiles.d/github-qemu-runner.conf"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

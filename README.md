@@ -31,7 +31,7 @@ actions-runner (latest, checksum-verified), flattened to
 - A GitHub App with **Self-hosted runners: Read & write** (org) and/or
   **Administration: Read & write** (repo), installed on the target org/repos
 
-## Install
+## Install (manual)
 
 ```bash
 go build -o github-qemu-runner ./cmd/github-qemu-runner
@@ -54,6 +54,67 @@ sudo cp packaging/github-qemu-runner.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now github-qemu-runner
 ```
+
+## Install (Arch Linux)
+
+```bash
+cd packaging/arch
+makepkg --cleanbuild --syncdeps
+sudo pacman -U github-qemu-runner-git-*.pkg.tar.zst
+```
+
+The package ships sysusers.d/tmpfiles.d fragments, so the `gh-runner` user
+(in the `kvm` group) and `/var/lib/github-qemu-runner` are created by
+pacman's hooks — no manual `useradd`. Then:
+
+```bash
+sudo cp /etc/github-qemu-runner/config.example.yaml /etc/github-qemu-runner/config.yaml
+sudoedit /etc/github-qemu-runner/config.yaml
+sudo install -m 0600 -o gh-runner -g gh-runner /path/to/app-private-key.pem /etc/github-qemu-runner/app-key.pem
+sudo -u gh-runner github-qemu-runner setup
+sudo -u gh-runner github-qemu-runner refresh-image
+sudo systemctl enable --now github-qemu-runner
+```
+
+## Install (NixOS)
+
+```nix
+{
+  inputs.github-qemu-runner.url = "github:a1678991/github-qemu-runner";
+
+  # In your nixosSystem modules:
+  imports = [ inputs.github-qemu-runner.nixosModules.default ];
+
+  services.github-qemu-runner = {
+    enable = true;
+    # String path, NOT a Nix path literal (a literal copies the key into
+    # the world-readable store).
+    privateKeyFile = "/run/secrets/app-key.pem";
+    settings = {
+      github = {
+        app_id = 123456;
+        installation_id = 7890123;
+      };
+      pools = [
+        {
+          name = "build";
+          scope = "org";
+          org = "my-org";
+          count = 1;
+          cpus = 8;
+          memory_mb = 16384;
+          disk_gb = 60;
+          labels = [ "self-hosted" "linux" "x64" "build" ];
+        }
+      ];
+    };
+  };
+}
+```
+
+The module wires the key via systemd `LoadCredential`; for manual
+`setup`/`refresh-image` runs use
+`systemd-run -P --wait -p LoadCredential=app-key.pem:/run/secrets/app-key.pem github-qemu-runner ... setup`.
 
 Use it from a workflow:
 
