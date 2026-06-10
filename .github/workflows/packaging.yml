@@ -1,0 +1,72 @@
+name: Packaging
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  arch-package:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      # git must exist before checkout; base-devel does not include it
+      - run: pacman -Syu --noconfirm git go qemu-base cdrtools namcap
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare non-root builder copy
+        run: |
+          useradd -m builder
+          git config --system --add safe.directory '*'
+          # makepkg clones from this copy; give it a real branch (PR
+          # checkouts are detached HEADs, which git clone cannot follow).
+          git switch -C ci-build
+          cp -r "$PWD" /home/builder/src
+          chown -R builder:builder /home/builder/src
+      - name: Point PKGBUILD at this checkout
+        run: |
+          sed -i 's|git+https://github.com/a1678991/github-qemu-runner.git|git+file:///home/builder/src|' \
+            /home/builder/src/packaging/arch/PKGBUILD
+      - name: Build package
+        run: su builder -c 'cd /home/builder/src/packaging/arch && makepkg --noconfirm'
+      - name: namcap (fail on errors only)
+        run: |
+          cd /home/builder/src/packaging/arch
+          namcap ./*.pkg.tar.zst | tee /tmp/namcap.out || true
+          if grep ' E: ' /tmp/namcap.out; then
+            echo '::error::namcap reported errors'
+            exit 1
+          fi
+      - name: Install and smoke test
+        run: |
+          cd /home/builder/src/packaging/arch
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          rc=0; github-qemu-runner nonsense || rc=$?
+          test "$rc" -eq 2
+          pacman -Ql github-qemu-runner-git | grep sysusers.d
+          pacman -Ql github-qemu-runner-git | grep tmpfiles.d
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: arch-package
+          path: /home/builder/src/packaging/arch/*.pkg.tar.zst
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - run: nix flake check --print-build-logs
+      - name: Format check
+        run: |
+          nix fmt
+          git diff --exit-code
+      - name: Smoke test
+        run: |
+          rc=0; nix run .#default -- nonsense || rc=$?
+          test "$rc" -eq 2
