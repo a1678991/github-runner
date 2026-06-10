@@ -1,0 +1,6 @@
+/github-qemu-runner-git/
+/src/
+/pkg/
+/gopath/
+*.pkg.tar.zst
+*.log
