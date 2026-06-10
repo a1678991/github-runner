@@ -86,7 +86,10 @@ jobs:
 - Do not attach these runners to public repositories (fork-PR risk — see
   GitHub's self-hosted runner hardening guide).
 - Hardening option: pass the App key via systemd `LoadCredential` (see the
-  commented lines in the unit file).
+  commented lines in the unit file). Note this applies only to the
+  controller service: `setup` and `refresh-image` run outside systemd where
+  `${CREDENTIALS_DIRECTORY}` is unset, so keep a root-readable key path for
+  manual commands or wrap them with `systemd-run -p LoadCredential=...`.
 - Run exactly ONE controller instance per org/repo scope. Startup reaping
   deletes offline `ghq-*` runner records in its scopes and would tear down a
   second instance's records.

@@ -53,6 +53,30 @@ func TestArgs(t *testing.T) {
 	}
 }
 
+func TestCreateOverlaySmallerThanBase(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed")
+	}
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.qcow2")
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", base, "30G").CombinedOutput(); err != nil {
+		t.Fatalf("create base: %v: %s", err, out)
+	}
+	overlay := filepath.Join(dir, "overlay.qcow2")
+	// Requesting less than the backing size must succeed (no shrink attempt)
+	// and keep the backing image's virtual size.
+	if err := CreateOverlay(context.Background(), base, overlay, 10); err != nil {
+		t.Fatal(err)
+	}
+	info, err := exec.Command("qemu-img", "info", overlay).CombinedOutput()
+	if err != nil {
+		t.Fatalf("qemu-img info: %v: %s", err, info)
+	}
+	if !strings.Contains(string(info), "30 GiB") {
+		t.Errorf("virtual size changed:\n%s", info)
+	}
+}
+
 func TestCreateOverlay(t *testing.T) {
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		t.Skip("qemu-img not installed")

@@ -28,6 +28,10 @@ ReadWritePaths=/var/lib/github-qemu-runner
 # credential. Set github.private_key_path in config.yaml to
 # ${CREDENTIALS_DIRECTORY}/app-key.pem when enabling this.
 #LoadCredential=app-key.pem:/etc/github-qemu-runner/app-key.pem
+# Note: CREDENTIALS_DIRECTORY exists only inside this service. `setup` and
+# `refresh-image` run outside systemd, so when this option is enabled run
+# them with the key path overridden or via:
+#   systemd-run -P --wait -p LoadCredential=app-key.pem:/etc/github-qemu-runner/app-key.pem ...
 
 [Install]
 WantedBy=multi-user.target

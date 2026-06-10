@@ -5,6 +5,7 @@ package qemu
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,17 +47,43 @@ func Args(s Spec) []string {
 
 // CreateOverlay makes a qcow2 overlay backed by base (which must be an
 // absolute path — qemu resolves relative backing paths against the overlay's
-// directory) and grows its virtual size to diskGB. The guest's cloud-init
-// growpart expands the root filesystem into the new space on boot.
+// directory) and grows its virtual size to diskGB when that exceeds the
+// backing image's size. The backing image sets the floor: qemu-img refuses
+// to shrink without --shrink, and shrinking a CoW view of a filesystem
+// would corrupt it anyway. The guest's cloud-init growpart expands the root
+// filesystem into any new space on boot.
 func CreateOverlay(ctx context.Context, base, dest string, diskGB int) error {
 	if out, err := exec.CommandContext(ctx, "qemu-img", "create",
 		"-f", "qcow2", "-b", base, "-F", "qcow2", dest).CombinedOutput(); err != nil {
 		return fmt.Errorf("qemu-img create %s: %v: %s", dest, err, out)
 	}
+	cur, err := virtualSize(ctx, dest)
+	if err != nil {
+		_ = os.Remove(dest)
+		return err
+	}
+	if int64(diskGB)*1024*1024*1024 <= cur {
+		return nil
+	}
 	if out, err := exec.CommandContext(ctx, "qemu-img", "resize",
 		dest, fmt.Sprintf("%dG", diskGB)).CombinedOutput(); err != nil {
-		_ = os.Remove(dest) // best-effort cleanup; resize failure is the real error
+		_ = os.Remove(dest)
 		return fmt.Errorf("qemu-img resize %s: %v: %s", dest, err, out)
 	}
 	return nil
+}
+
+// virtualSize reads a qcow2 image's virtual size in bytes.
+func virtualSize(ctx context.Context, path string) (int64, error) {
+	out, err := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", path).Output()
+	if err != nil {
+		return 0, fmt.Errorf("qemu-img info %s: %w", path, err)
+	}
+	var info struct {
+		VirtualSize int64 `json:"virtual-size"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return 0, fmt.Errorf("parse qemu-img info for %s: %w", path, err)
+	}
+	return info.VirtualSize, nil
 }
