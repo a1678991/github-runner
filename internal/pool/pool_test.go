@@ -19,6 +19,7 @@ type fakeAPI struct {
 	busy    bool
 	deleted []int64
 	jitErr  error
+	getErr  error
 }
 
 func (f *fakeAPI) GenerateJITConfig(_ context.Context, _ string, req github.JITRequest) (*github.JITResult, error) {
@@ -28,9 +29,18 @@ func (f *fakeAPI) GenerateJITConfig(_ context.Context, _ string, req github.JITR
 	return &github.JITResult{Runner: github.Runner{ID: 42, Name: req.Name}, EncodedJITConfig: "blob"}, nil
 }
 
+func (f *fakeAPI) setGetErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getErr = err
+}
+
 func (f *fakeAPI) GetRunner(context.Context, string, int64) (*github.Runner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	return &github.Runner{ID: 42, Status: f.status, Busy: f.busy}, nil
 }
 
@@ -211,5 +221,58 @@ func TestRunReturnsOnCancel(t *testing.T) {
 	case <-finished:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return on cancelled context")
+	}
+}
+
+func TestDrainTreatsAPIErrorAsBusy(t *testing.T) {
+	api := &fakeAPI{status: "online", busy: false}
+	vm := newFakeVM()
+	p := testPool(api, &fakeProv{vm: vm})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.runOne(ctx, 0) }()
+	time.Sleep(50 * time.Millisecond) // pass the liveness gate
+	api.setGetErr(errors.New("github is down"))
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runOne did not return")
+	}
+	if !vm.wasPowered() {
+		t.Error("VM not powered down after drain timeout")
+	}
+	// Busy-grace path: only the deferred record delete runs (1), not the
+	// idle path's pre-powerdown delete (which would make it 2).
+	if got := api.deletedIDs(); len(got) != 1 {
+		t.Errorf("deleted %d times, want 1 (busy path)", len(got))
+	}
+}
+
+func TestCancelDuringLivenessGateDrains(t *testing.T) {
+	api := &fakeAPI{status: "offline"} // never comes online
+	vm := newFakeVM()
+	p := testPool(api, &fakeProv{vm: vm})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.runOne(ctx, 0) }()
+	time.Sleep(30 * time.Millisecond) // inside the liveness gate
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shutdown during liveness gate must not be an error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runOne did not return")
+	}
+	if !vm.wasPowered() {
+		t.Error("VM not powered down via drain")
+	}
+	if vm.wasKilled() {
+		t.Error("VM was hard-killed; expected graceful drain")
 	}
 }

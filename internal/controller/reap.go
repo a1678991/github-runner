@@ -22,6 +22,10 @@ type reaperAPI interface {
 // ReapOrphans cleans up after a crashed controller: leftover qemu
 // processes and workdirs under runDir, plus offline ghq-* runner records
 // on GitHub. Best-effort; failures are logged, never fatal.
+// NOTE: deletion is scoped only by the ghq- name prefix, so this assumes a
+// single controller instance per org/repo scope. A second controller on the
+// same scope would have its offline (e.g. mid-boot) runner records deleted
+// by this instance's startup reap.
 func ReapOrphans(ctx context.Context, runDir string, gh reaperAPI, prefixes []string, log *slog.Logger) {
 	entries, err := os.ReadDir(runDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

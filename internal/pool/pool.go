@@ -119,6 +119,12 @@ func (p *Pool) runOne(ctx context.Context, slot int) error {
 
 	log.Info("VM booted, waiting for runner to come online")
 	if err := p.awaitOnline(ctx, vm, prefix, jit.Runner.ID); err != nil {
+		if ctx.Err() != nil {
+			// Normal shutdown while still waiting for the runner: drain
+			// instead of reporting a liveness failure.
+			p.drain(vm, prefix, jit.Runner.ID, log)
+			return nil
+		}
 		// Surface the guest console before teardown deletes it.
 		log.Warn("liveness gate failed; killing VM", "console_tail", vm.ConsoleTail())
 		_ = vm.Kill()
@@ -147,14 +153,15 @@ func (p *Pool) awaitOnline(ctx context.Context, vm VM, prefix string, id int64) 
 	if interval == 0 {
 		interval = 10 * time.Second
 	}
-	deadline := time.After(time.Duration(p.Cfg.LivenessTimeout))
+	deadline := time.NewTimer(time.Duration(p.Cfg.LivenessTimeout))
+	defer deadline.Stop()
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
 		select {
 		case <-vm.Done():
 			return fmt.Errorf("VM exited before runner came online: %v", vm.Err())
-		case <-deadline:
+		case <-deadline.C:
 			return fmt.Errorf("runner not online within %v", time.Duration(p.Cfg.LivenessTimeout))
 		case <-ctx.Done():
 			return ctx.Err()
@@ -178,7 +185,9 @@ func (p *Pool) drain(vm VM, prefix string, id int64, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r, err := p.GH.GetRunner(ctx, prefix, id)
-	busy := err == nil && r.Busy
+	// Unknown state (API error at shutdown) gets the busy-grace treatment:
+	// a 30-minute wait on an idle runner is cheaper than killing a job.
+	busy := err != nil || r.Busy
 	if !busy {
 		log.Info("draining idle runner")
 		p.deleteRecord(prefix, id, log)
