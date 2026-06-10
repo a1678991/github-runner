@@ -1,0 +1,33 @@
+# github-qemu-runner configuration. Copy to
+# /etc/github-qemu-runner/config.yaml and edit.
+
+github:
+  # Your GitHub App (needs: org "Self-hosted runners: Read & write" for
+  # org pools, repo "Administration: Read & write" for repo pools).
+  app_id: 123456
+  installation_id: 7890123
+  private_key_path: /etc/github-qemu-runner/app-key.pem
+  # api_base_url: https://api.github.com
+
+# state_dir: /var/lib/github-qemu-runner
+
+pools:
+  - name: fmt
+    scope: org # org | repo (repo also needs `repo: owner/name`)
+    org: my-org
+    count: 2
+    cpus: 2
+    memory_mb: 2048
+    disk_gb: 20
+    labels: [self-hosted, linux, x64, fmt]
+    # runner_group: Default
+    # liveness_timeout: 5m
+    # drain_timeout: 30m
+  - name: build
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 8
+    memory_mb: 16384
+    disk_gb: 60
+    labels: [self-hosted, linux, x64, build]
