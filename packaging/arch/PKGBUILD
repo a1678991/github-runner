@@ -10,6 +10,9 @@ depends=('qemu-base' 'cdrtools')
 makedepends=('git' 'go')
 provides=('github-qemu-runner')
 conflicts=('github-qemu-runner')
+# Go binaries gain nothing from Arch's split debug packages (broken
+# .build-id symlinks with -trimpath) or LTO flags.
+options=('!debug' '!lto')
 source=("$pkgname::git+https://github.com/a1678991/github-qemu-runner.git")
 sha256sums=('SKIP')
 

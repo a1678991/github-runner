@@ -65,8 +65,10 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - run: nix flake check --print-build-logs
       - name: Format check
+        # nixfmt >= 1.3 treats a bare invocation as stdin, so pass the file
+        # list explicitly.
         run: |
-          nix fmt
+          git ls-files '*.nix' | xargs -r nix fmt
           git diff --exit-code
       - name: Smoke test
         run: |
