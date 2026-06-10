@@ -1,0 +1,14 @@
+# binaries
+/github-qemu-runner
+/dist/
+*.test
+
+# test artifacts
+coverage.out
+
+# npm
+node_modules/
+
+# editor / OS
+*.swp
+.DS_Store

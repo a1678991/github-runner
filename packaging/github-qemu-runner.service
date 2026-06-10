@@ -1,0 +1,37 @@
+[Unit]
+Description=Ephemeral GitHub Actions runners on QEMU/KVM
+Documentation=https://github.com/a1678991/github-qemu-runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=gh-runner
+Group=gh-runner
+SupplementaryGroups=kvm
+ExecStart=/usr/local/bin/github-qemu-runner -config /etc/github-qemu-runner/config.yaml controller
+Restart=on-failure
+RestartSec=10
+# Must exceed the largest pool drain_timeout (default 30m) plus margin,
+# or systemd SIGKILLs mid-drain.
+TimeoutStopSec=35m
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+StateDirectory=github-qemu-runner
+ReadWritePaths=/var/lib/github-qemu-runner
+
+# Hardening option: keep the App key root-owned and pass it as a systemd
+# credential. Set github.private_key_path in config.yaml to
+# ${CREDENTIALS_DIRECTORY}/app-key.pem when enabling this.
+#LoadCredential=app-key.pem:/etc/github-qemu-runner/app-key.pem
+# Note: CREDENTIALS_DIRECTORY exists only inside this service. `setup` and
+# `refresh-image` run outside systemd, so when this option is enabled run
+# them with the key path overridden or via:
+#   systemd-run -P --wait -p LoadCredential=app-key.pem:/etc/github-qemu-runner/app-key.pem ...
+
+[Install]
+WantedBy=multi-user.target
