@@ -20,6 +20,10 @@ pre-commit:
       run: mise exec -- actionlint
     - name: secretlint
       run: mise exec -- npx secretlint --maskSecrets {staged_files}
+    - name: nixfmt
+      glob: "*.nix"
+      run: nix fmt {staged_files}
+      stage_fixed: true
 
 commit-msg:
   jobs:
