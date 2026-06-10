@@ -175,6 +175,32 @@ func TestCapacityWarnings(t *testing.T) {
 	}
 }
 
+func TestLabelValidation(t *testing.T) {
+	cases := []struct{ name, label string }{
+		{"empty label", `""`},
+		{"whitespace label", `" "`},
+		{"comma in label", `"a,b"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			y := strings.Replace(validYAML,
+				"labels: [self-hosted, linux, x64, fmt]",
+				"labels: [self-hosted, "+tc.label+"]", 1)
+			_, err := Load(writeConfig(t, y))
+			if err == nil || !strings.Contains(err.Error(), "invalid label") {
+				t.Fatalf("want invalid label error, got %v", err)
+			}
+		})
+	}
+	// long label
+	y := strings.Replace(validYAML,
+		"labels: [self-hosted, linux, x64, fmt]",
+		`labels: ["`+strings.Repeat("x", 257)+`"]`, 1)
+	if _, err := Load(writeConfig(t, y)); err == nil || !strings.Contains(err.Error(), "invalid label") {
+		t.Fatalf("want invalid label error for long label, got %v", err)
+	}
+}
+
 func TestRepoScopeRejectsCustomGroup(t *testing.T) {
 	y := strings.NewReplacer(
 		"scope: org", "scope: repo",

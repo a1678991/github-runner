@@ -163,6 +163,11 @@ func (c *Config) validate() error {
 		if len(p.Labels) == 0 {
 			return fmt.Errorf("pool %s: at least one label is required", p.Name)
 		}
+		for _, l := range p.Labels {
+			if strings.TrimSpace(l) == "" || strings.Contains(l, ",") || len(l) > 256 {
+				return fmt.Errorf("pool %s: invalid label %q (must be non-empty, no commas, <= 256 chars)", p.Name, l)
+			}
+		}
 	}
 	return nil
 }

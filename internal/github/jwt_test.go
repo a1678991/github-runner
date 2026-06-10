@@ -60,7 +60,7 @@ func TestMintJWT(t *testing.T) {
 	if claims.Iat != now.Unix()-60 {
 		t.Errorf("iat = %d", claims.Iat)
 	}
-	if claims.Exp != now.Unix()+540 {
+	if claims.Exp != now.Unix()+480 {
 		t.Errorf("exp = %d", claims.Exp)
 	}
 }
