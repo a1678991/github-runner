@@ -90,7 +90,7 @@ repositories.
 - A GitHub App with **Self-hosted runners: Read & write** (org) and/or
   **Administration: Read & write** (repo), installed on the target org/repos
 
-The docker backend has different host prerequisites — see "Docker backend" below.
+The docker backend has different host prerequisites — see "Docker backend" above.
 
 ## Install (manual)
 
