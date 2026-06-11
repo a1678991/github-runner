@@ -24,3 +24,6 @@ packaging/arch/release/pkg/
 packaging/arch/release/src/
 packaging/arch/release/*.pkg.tar.zst
 packaging/arch/release/*.tar.gz
+
+# deb artifacts (local builds)
+packaging/deb/dist/

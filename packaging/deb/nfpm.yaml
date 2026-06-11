@@ -1,0 +1,55 @@
+# nfpm config for the Debian/Ubuntu package. Built by build.sh, which
+# supplies DEB_ARCH, DEB_VERSION, and DEB_STAGING (cross-compiled binary +
+# generated unit/copyright/changelog) and runs nfpm from the repo root.
+#
+# No Depends/Recommends: the binary is static (CGO_ENABLED=0), and backend
+# prerequisites stay documented host setup — gVisor is not in Ubuntu's
+# archive, and a docker.io Recommends would fight docker-ce installs.
+name: github-qemu-runner
+arch: ${DEB_ARCH}
+platform: linux
+version: ${DEB_VERSION}
+section: admin
+priority: optional
+maintainer: a1678991 <a1678991@iroserver.net>
+description: |-
+  Ephemeral GitHub Actions self-hosted runners in disposable QEMU/KVM VMs
+  A daemon that supervises static pools of runner slots. Each job runs in
+  a fresh copy-on-write VM (or, on hosts without /dev/kvm, a
+  gVisor-sandboxed Docker container) that is destroyed afterwards — the
+  sandbox is the isolation boundary.
+homepage: https://github.com/a1678991/github-qemu-runner
+license: MIT
+contents:
+  - src: ${DEB_STAGING}/github-qemu-runner
+    dst: /usr/bin/github-qemu-runner
+    expand: true
+  - src: ${DEB_STAGING}/github-qemu-runner.service
+    dst: /usr/lib/systemd/system/github-qemu-runner.service
+    expand: true
+  - src: packaging/config.example.yaml
+    dst: /etc/github-qemu-runner/config.example.yaml
+    type: config
+  # The sysusers/tmpfiles fragments are distro-agnostic; they live under
+  # packaging/arch/ for historical reasons (see the deb packaging design
+  # doc — moving them would churn the release-managed PKGBUILD).
+  - src: packaging/arch/github-qemu-runner.sysusers
+    dst: /usr/lib/sysusers.d/github-qemu-runner.conf
+  - src: packaging/arch/github-qemu-runner.tmpfiles
+    dst: /usr/lib/tmpfiles.d/github-qemu-runner.conf
+  - src: ${DEB_STAGING}/copyright
+    dst: /usr/share/doc/github-qemu-runner/copyright
+    expand: true
+  # The version carries no Debian revision, so lintian treats the package
+  # as native: the changelog is plain changelog.gz, not changelog.Debian.gz.
+  - src: ${DEB_STAGING}/changelog.gz
+    dst: /usr/share/doc/github-qemu-runner/changelog.gz
+    expand: true
+  - src: packaging/deb/lintian-overrides
+    dst: /usr/share/lintian/overrides/github-qemu-runner
+  - src: README.md
+    dst: /usr/share/doc/github-qemu-runner/README.md
+scripts:
+  postinstall: packaging/deb/scripts/postinst.sh
+  preremove: packaging/deb/scripts/prerm.sh
+  postremove: packaging/deb/scripts/postrm.sh
