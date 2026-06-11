@@ -58,10 +58,30 @@ func TestContainerNonzeroExit(t *testing.T) {
 }
 
 func TestContainerKill(t *testing.T) {
-	bin, argvLog := fakeDocker(t, "0")
+	dir := t.TempDir()
+	argvLog := filepath.Join(dir, "argv.log")
+	gate := filepath.Join(dir, "gate")
+	bin := filepath.Join(dir, "docker")
+	// `wait` blocks until `rm` creates the gate file, then reports 137 —
+	// mimicking a running container that only exits when force-removed.
+	script := `#!/bin/sh
+echo "$@" >> ` + argvLog + `
+case "$1" in
+  wait) while [ ! -e ` + gate + ` ]; do sleep 0.05; done; echo 137 ;;
+  rm) touch ` + gate + ` ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	c := newContainer(bin, "ghq-x-3")
 	if err := c.Kill(); err != nil {
 		t.Fatal(err)
+	}
+	awaitDone(t, c)
+	if err := c.Err(); err == nil || !strings.Contains(err.Error(), "137") {
+		t.Errorf("Err() = %v, want status-137 error after force-remove", err)
 	}
 	b, _ := os.ReadFile(argvLog)
 	if !strings.Contains(string(b), "rm --force --volumes ghq-x-3") {

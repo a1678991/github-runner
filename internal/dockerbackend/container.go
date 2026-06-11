@@ -1,6 +1,7 @@
 package dockerbackend
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -28,7 +29,12 @@ func newContainer(bin, name string) *Container {
 		out, err := exec.Command(bin, "wait", name).Output()
 		switch {
 		case err != nil:
-			c.setErr(fmt.Errorf("docker wait %s: %w", name, err))
+			var stderr []byte
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				stderr = ee.Stderr
+			}
+			c.setErr(fmt.Errorf("docker wait %s: %v: %s", name, err, stderr))
 		case strings.TrimSpace(string(out)) != "0":
 			c.setErr(fmt.Errorf("container %s exited with status %s",
 				name, strings.TrimSpace(string(out))))
@@ -55,11 +61,20 @@ func (c *Container) Err() error {
 }
 
 // Kill force-removes the container (and its anonymous volumes, including
-// the inner /var/lib/docker) and waits for the watcher to notice.
+// the inner /var/lib/docker) and waits for the watcher to notice. The
+// wait is bounded: a hung docker daemon must not wedge the pool slot
+// forever — the watcher goroutine then leaks until the daemon recovers,
+// which is the lesser evil.
 func (c *Container) Kill() error {
-	_ = exec.Command(c.bin, "rm", "--force", "--volumes", c.name).Run()
-	<-c.done
-	return nil
+	if out, err := exec.Command(c.bin, "rm", "--force", "--volumes", c.name).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker rm %s: %v: %s", c.name, err, out)
+	}
+	select {
+	case <-c.done:
+		return nil
+	case <-time.After(2 * time.Minute):
+		return fmt.Errorf("container %s not reaped 2m after docker rm", c.name)
+	}
 }
 
 // Powerdown stops the container gracefully: SIGTERM to the entrypoint,
