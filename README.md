@@ -137,6 +137,27 @@ sudo -u gh-runner github-qemu-runner refresh-image
 sudo systemctl enable --now github-qemu-runner
 ```
 
+## Install (Ubuntu / Debian)
+
+Download the `.deb` for your architecture (`amd64`, `arm64`) from
+[Releases](https://github.com/a1678991/github-qemu-runner/releases), or
+build it locally with `mise x -- packaging/deb/build.sh <arch>` (output in
+`packaging/deb/dist/`). Then:
+
+```bash
+sudo dpkg -i github-qemu-runner_*_arm64.deb
+```
+
+The package applies the same sysusers.d/tmpfiles.d fragments as the Arch
+package on install, so the `gh-runner` user and state directory exist
+afterwards; the config/key/setup steps are identical to the Arch section
+above. On arm64 hosts use the docker backend (see "Docker backend" above):
+install Docker + gVisor and add `gh-runner` to the `docker` group before
+`setup`.
+
+Package upgrades never stop or restart a running service — a restart
+drains every runner slot, so restart manually when convenient.
+
 ## Install (NixOS)
 
 ```nix
