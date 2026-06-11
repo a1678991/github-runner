@@ -35,9 +35,18 @@ Decisions settled during brainstorming:
   PKGBUILDs)
 - `/etc/github-qemu-runner/config.example.yaml` — conffile
 - `/usr/lib/sysusers.d/github-qemu-runner.conf`, `/usr/lib/tmpfiles.d/github-qemu-runner.conf`
-- `/usr/share/doc/github-qemu-runner/copyright` (generated from LICENSE with
-  a Format/Upstream-Name header), `README.md`, and a one-stanza
-  `changelog.Debian.gz` generated from the build version (lintian wants both)
+- `/usr/share/doc/github-qemu-runner/copyright` (LICENSE verbatim),
+  `README.md`, and a one-stanza `changelog.gz` generated from the build
+  version (plain `changelog.gz`, not `changelog.Debian.gz`: the version
+  carries no Debian revision, so lintian treats the package as native)
+- `/usr/share/lintian/overrides/github-qemu-runner` — overrides
+  `statically-linked-binary`, which is the point of a CGO_ENABLED=0 build
+
+> **Amendment (2026-06-12, after local lintian):** the binary is built with
+> `-ldflags '-s -w'` to clear `unstripped-binary-or-object` (panic
+> backtraces are unaffected — Go resolves frames via pclntab), and the
+> description gained an extended paragraph to clear
+> `extended-description-is-empty`.
 
 ## Maintainer scripts — `packaging/deb/scripts/`
 
