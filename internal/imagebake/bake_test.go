@@ -75,8 +75,8 @@ func TestLatestRunner(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": "v2.335.1",
 			"body": "## SHA-256\n" +
-				"actions-runner-linux-x64-2.335.1.tar.gz " +
-				"<!-- BEGIN SHA --> abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 <!-- END -->",
+				"- actions-runner-linux-x64-2.335.1.tar.gz " +
+				"<!-- BEGIN SHA linux-x64 -->abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789<!-- END SHA linux-x64 -->",
 			"assets": []map[string]any{
 				{"name": "actions-runner-linux-arm64-2.335.1.tar.gz", "browser_download_url": "https://x/arm64.tar.gz"},
 				{"name": "actions-runner-linux-x64-2.335.1.tar.gz", "browser_download_url": "https://x/x64.tar.gz"},
@@ -96,11 +96,15 @@ func TestLatestRunner(t *testing.T) {
 	}
 }
 
-func TestLatestRunnerArm64(t *testing.T) {
+// TestLatestRunnerArm64NoMarkers exercises the SHA-not-found fallback:
+// when the release body lacks the BEGIN/END SHA markers (format drift,
+// or a release that hasn't been published with them yet), SHA256 must
+// come back empty so the caller falls through to the TLS-only path.
+func TestLatestRunnerArm64NoMarkers(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
 			"tag_name": "v2.335.1",
-			"body": "actions-runner-linux-arm64-2.335.1.tar.gz aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"body": "release notes with no checksum markers at all",
 			"assets": [
 				{"name": "actions-runner-linux-x64-2.335.1.tar.gz", "browser_download_url": "https://example.com/x64.tar.gz"},
 				{"name": "actions-runner-linux-arm64-2.335.1.tar.gz", "browser_download_url": "https://example.com/arm64.tar.gz"}
@@ -115,8 +119,59 @@ func TestLatestRunnerArm64(t *testing.T) {
 	if rel.TarballURL != "https://example.com/arm64.tar.gz" {
 		t.Errorf("TarballURL = %q, want arm64 asset", rel.TarballURL)
 	}
-	if rel.SHA256 != strings.Repeat("a", 64) {
-		t.Errorf("SHA256 = %q", rel.SHA256)
+	if rel.SHA256 != "" {
+		t.Errorf("SHA256 = %q, want empty (no markers → TLS-only fallback)", rel.SHA256)
+	}
+}
+
+func TestLatestRunnerSHAFromMarkers(t *testing.T) {
+	// Realistic release body: the asset filename appears FIRST in a
+	// per-platform install instructions block (curl + tar) long before
+	// the checksum table. The naive "first 64-hex after asset name"
+	// regex would grab the win-x64 SHA for every arch.
+	body := "## Windows x64\n```\n" +
+		"curl -O -L https://github.com/actions/runner/releases/download/v2.335.1/actions-runner-win-x64-2.335.1.zip\n" +
+		"```\n" +
+		"## Linux arm64\n```bash\n" +
+		"curl -O -L https://github.com/actions/runner/releases/download/v2.335.1/actions-runner-linux-arm64-2.335.1.tar.gz\n" +
+		"tar xzf ./actions-runner-linux-arm64-2.335.1.tar.gz\n" +
+		"```\n" +
+		"## Linux x64\n```bash\n" +
+		"curl -O -L https://github.com/actions/runner/releases/download/v2.335.1/actions-runner-linux-x64-2.335.1.tar.gz\n" +
+		"tar xzf ./actions-runner-linux-x64-2.335.1.tar.gz\n" +
+		"```\n" +
+		"## SHA-256 Checksums\n" +
+		"- actions-runner-win-x64-2.335.1.zip <!-- BEGIN SHA win-x64 -->" + strings.Repeat("b", 64) + "<!-- END SHA win-x64 -->\n" +
+		"- actions-runner-linux-x64-2.335.1.tar.gz <!-- BEGIN SHA linux-x64 -->" + strings.Repeat("c", 64) + "<!-- END SHA linux-x64 -->\n" +
+		"- actions-runner-linux-arm64-2.335.1.tar.gz <!-- BEGIN SHA linux-arm64 -->" + strings.Repeat("d", 64) + "<!-- END SHA linux-arm64 -->\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v2.335.1",
+			"body":     body,
+			"assets": []map[string]any{
+				{"name": "actions-runner-linux-x64-2.335.1.tar.gz", "browser_download_url": "https://example.com/x64.tar.gz"},
+				{"name": "actions-runner-linux-arm64-2.335.1.tar.gz", "browser_download_url": "https://example.com/arm64.tar.gz"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	armRel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if armRel.SHA256 != strings.Repeat("d", 64) {
+		t.Errorf("arm64 SHA256 = %q, want %q (NOT the win-x64 trap %q)",
+			armRel.SHA256, strings.Repeat("d", 64), strings.Repeat("b", 64))
+	}
+
+	x64Rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "x64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x64Rel.SHA256 != strings.Repeat("c", 64) {
+		t.Errorf("x64 SHA256 = %q, want %q", x64Rel.SHA256, strings.Repeat("c", 64))
 	}
 }
 

@@ -200,10 +200,13 @@ func LatestRunner(ctx context.Context, client *http.Client, apiBase, arch string
 	if out.TarballURL == "" {
 		return Release{}, fmt.Errorf("asset %s not found in release %s", want, rel.TagName)
 	}
-	// First standalone 64-hex token after the asset name in the release
-	// notes. (?s) lets .*? cross newlines; \b keeps it from grabbing a
-	// 64-char slice of a longer hex run.
-	re := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(want) + `.*?\b([0-9a-fA-F]{64})\b`)
+	// SHA comes from the "<!-- BEGIN SHA linux-<arch> -->" markers GitHub
+	// embeds in the release notes' checksum table; the asset name alone is
+	// ambiguous (it also appears in the install instructions, and the first
+	// hex token after that is a different platform's SHA). If the markers
+	// vanish in a future format change, SHA256 stays empty and the caller
+	// proceeds on TLS alone.
+	re := regexp.MustCompile(`<!-- BEGIN SHA linux-` + regexp.QuoteMeta(arch) + ` -->\s*([0-9a-fA-F]{64})\s*<!-- END SHA linux-` + regexp.QuoteMeta(arch) + ` -->`)
 	if m := re.FindStringSubmatch(rel.Body); m != nil {
 		out.SHA256 = strings.ToLower(m[1])
 	}
