@@ -84,6 +84,68 @@ jobs:
           for f in *.pkg.tar.zst; do sha256sum "$f" > "$f.sha256"; done
           gh release upload "$TAG" ./*.pkg.tar.zst ./*.pkg.tar.zst.sha256 --clobber
 
+  deb:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - name: Build package
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          ARCH: ${{ matrix.arch }}
+        run: DEB_VERSION="${TAG#v}" packaging/deb/build.sh "$ARCH"
+      - name: lintian (fail on errors only)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq lintian
+          lintian --tag-display-limit 0 packaging/deb/dist/*.deb | tee /tmp/lintian.out || true
+          if grep '^E: ' /tmp/lintian.out; then
+            echo '::error::lintian reported errors'
+            exit 1
+          fi
+      - name: Install and smoke test (native)
+        if: matrix.arch == 'amd64'
+        run: |
+          sudo dpkg -i packaging/deb/dist/*.deb
+          rc=0; github-qemu-runner nonsense || rc=$?
+          test "$rc" -eq 2
+          getent passwd gh-runner
+          execstart=$(grep '^ExecStart=' /usr/lib/systemd/system/github-qemu-runner.service | cut -d= -f2- | awk '{print $1}')
+          test -x "$execstart"
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        if: matrix.arch == 'arm64'
+        with:
+          platforms: arm64
+      - name: Install and smoke test (arm64 container)
+        if: matrix.arch == 'arm64'
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/packaging/deb/dist:/pkgs:ro" ubuntu:24.04 bash -ec '
+            dpkg -i /pkgs/*.deb
+            rc=0; github-qemu-runner nonsense || rc=$?
+            test "$rc" -eq 2'
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          cd packaging/deb/dist
+          # Guard: the asset name must carry the released version.
+          test -f "github-qemu-runner_${TAG#v}_$ARCH.deb"
+          for f in *.deb; do sha256sum "$f" > "$f.sha256"; done
+          gh release upload "$TAG" ./*.deb ./*.deb.sha256 --clobber
+
   tarball:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
