@@ -73,7 +73,7 @@ func (o *Options) defaults() {
 	}
 }
 
-// Release identifies an actions/runner build for linux-x64.
+// Release identifies an actions/runner build for one linux arch.
 type Release struct {
 	Version    string
 	TarballURL string
@@ -158,10 +158,11 @@ func DownloadVerified(ctx context.Context, client *http.Client, url, dest, wantS
 	return os.Rename(tmp, dest)
 }
 
-// LatestRunner resolves the newest actions/runner release for linux-x64.
-// The tarball SHA is scraped from the release notes; if the notes format
-// changes, SHA256 comes back empty and the caller proceeds on TLS alone.
-func LatestRunner(ctx context.Context, client *http.Client, apiBase string) (Release, error) {
+// LatestRunner resolves the newest actions/runner release for the given
+// arch ("x64" or "arm64"). The tarball SHA is scraped from the release
+// notes; if the notes format changes, SHA256 comes back empty and the
+// caller proceeds on TLS alone.
+func LatestRunner(ctx context.Context, client *http.Client, apiBase, arch string) (Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimRight(apiBase, "/")+"/repos/actions/runner/releases/latest", nil)
 	if err != nil {
@@ -188,7 +189,7 @@ func LatestRunner(ctx context.Context, client *http.Client, apiBase string) (Rel
 		return Release{}, err
 	}
 	version := strings.TrimPrefix(rel.TagName, "v")
-	want := fmt.Sprintf("actions-runner-linux-x64-%s.tar.gz", version)
+	want := fmt.Sprintf("actions-runner-linux-%s-%s.tar.gz", arch, version)
 	out := Release{Version: version}
 	for _, a := range rel.Assets {
 		if a.Name == want {
@@ -261,7 +262,7 @@ func Bake(ctx context.Context, o Options) error {
 		return err
 	}
 
-	rel, err := LatestRunner(ctx, o.HTTP, o.APIBase)
+	rel, err := LatestRunner(ctx, o.HTTP, o.APIBase, "x64")
 	if err != nil {
 		return fmt.Errorf("resolve runner release: %w", err)
 	}

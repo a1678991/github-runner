@@ -84,7 +84,7 @@ func TestLatestRunner(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL)
+	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "x64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +92,30 @@ func TestLatestRunner(t *testing.T) {
 		t.Errorf("rel = %+v", rel)
 	}
 	if rel.SHA256 != "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789" {
+		t.Errorf("SHA256 = %q", rel.SHA256)
+	}
+}
+
+func TestLatestRunnerArm64(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"tag_name": "v2.335.1",
+			"body": "actions-runner-linux-arm64-2.335.1.tar.gz aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"assets": [
+				{"name": "actions-runner-linux-x64-2.335.1.tar.gz", "browser_download_url": "https://example.com/x64.tar.gz"},
+				{"name": "actions-runner-linux-arm64-2.335.1.tar.gz", "browser_download_url": "https://example.com/arm64.tar.gz"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.TarballURL != "https://example.com/arm64.tar.gz" {
+		t.Errorf("TarballURL = %q, want arm64 asset", rel.TarballURL)
+	}
+	if rel.SHA256 != strings.Repeat("a", 64) {
 		t.Errorf("SHA256 = %q", rel.SHA256)
 	}
 }
