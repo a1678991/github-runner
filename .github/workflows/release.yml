@@ -29,38 +29,33 @@ jobs:
     container: archlinux:base-devel
     steps:
       # git must exist before checkout; base-devel does not include it.
-      # pacman-contrib provides updpkgsums, github-cli provides gh.
-      - run: pacman -Syu --noconfirm git go qemu-base cdrtools namcap pacman-contrib github-cli
+      # github-cli provides gh.
+      - run: pacman -Syu --noconfirm git go qemu-base cdrtools namcap github-cli
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
       - name: Prepare non-root builder copy
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           useradd -m builder
+          git config --system --add safe.directory '*'
+          ver=$(sed -n 's/^pkgver=\([0-9.]*\).*/\1/p' packaging/arch/release/PKGBUILD)
+          test -n "$ver" || { echo '::error::failed to extract pkgver from PKGBUILD'; exit 1; }
+          test "v$ver" = "$TAG" \
+            || { echo "::error::PKGBUILD pkgver v$ver does not match released tag $TAG"; exit 1; }
           cp -r packaging/arch/release /home/builder/build
+          # The repo is private, so the PKGBUILD's public archive URL 404s
+          # for the anonymous curl that makepkg/updpkgsums use. Provide the
+          # source tarball from this authenticated checkout of the tag
+          # instead; makepkg uses a pre-existing source file as-is
+          # (sha256sums stays SKIP).
+          git archive --format=tar.gz --prefix="github-qemu-runner-$ver/" \
+            -o "/home/builder/build/github-qemu-runner-$ver.tar.gz" HEAD
           chown -R builder:builder /home/builder/build
       - name: Build package
-        # updpkgsums fetches the tag tarball (created by the release-please
-        # job moments ago) and fills sha256sums before makepkg verifies it.
-        # The archive can lag tag creation by a few seconds, hence the retry.
-        run: |
-          runuser -u builder -- bash -s <<'EOF'
-          set -euo pipefail
-          cd /home/builder/build
-          for attempt in 1 2 3 4 5; do
-            if updpkgsums; then
-              break
-            fi
-            echo "updpkgsums attempt $attempt failed; retrying in 10s"
-            sleep 10
-          done
-          if grep -q "sha256sums=('SKIP')" PKGBUILD; then
-            echo "::error::updpkgsums never filled sha256sums; tag archive unavailable?"
-            exit 1
-          fi
-          makepkg --noconfirm
-          EOF
+        run: runuser -u builder -- bash -c 'cd /home/builder/build && makepkg --noconfirm'
       - name: namcap (fail on errors only)
         run: |
           cd /home/builder/build

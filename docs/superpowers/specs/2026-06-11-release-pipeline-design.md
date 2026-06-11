@@ -74,19 +74,29 @@ existing workflows (zizmor-checked).
 
 Runs in `archlinux:base-devel` container (same as `packaging.yml`):
 
-1. Install `git go qemu-base cdrtools namcap pacman-contrib github-cli`
-   (`pacman-contrib` provides `updpkgsums`)
+1. Install `git go qemu-base cdrtools namcap github-cli`
 2. Checkout `ref: tag_name`
 3. Non-root builder user; `cd packaging/arch/release`
-4. `updpkgsums` — fetches the just-published tag tarball from GitHub and
-   fills `sha256sums` (the tag exists because the release-please job
-   created it before this job started)
+4. `git archive` the checked-out tag into
+   `github-qemu-runner-<ver>.tar.gz` next to the PKGBUILD — makepkg uses
+   a pre-existing source file as-is, `sha256sums` stays `SKIP` (see
+   amendment below); a guard asserts the PKGBUILD `pkgver` matches the
+   released tag
 5. `makepkg --noconfirm`
 6. namcap gate (fail on ` E: ` only) + install smoke test (`pacman -U`,
    exit-code check, sysusers/tmpfiles presence, ExecStart path) — same
    checks as the existing `-git` job
 7. `gh release upload <tag> *.pkg.tar.zst *.pkg.tar.zst.sha256 --clobber`
    (sha256 sibling generated with `sha256sum`)
+
+> **Amendment (2026-06-11, after first release):** the original design had
+> this job run `updpkgsums` against the PKGBUILD's public archive URL. The
+> repo is private, so that URL returns 404 to the anonymous curl
+> makepkg/updpkgsums use — the v0.1.0 run failed exactly there. The job now
+> provides the source tarball from its own authenticated checkout of the
+> tag (`git archive`, same local-source trick as the PR-time job). The
+> PKGBUILD itself is unchanged and its source URL becomes valid for end
+> users if/when the repo goes public.
 
 ### Job `tarball` — `if: release_created`
 
