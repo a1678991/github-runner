@@ -111,6 +111,27 @@ controller and `setup` log a prominent warning for this configuration and
 the README states it plainly. It exists only for hosts where gVisor cannot
 run and the operator explicitly accepts the risk.
 
+**Validated on real hardware (2026-06-11, OCI Ampere A1, arm64, Ubuntu
+24.04, runsc release-20260601.0, Docker 29.5.3):**
+
+- The inner dockerd **must** run with `--iptables=false --ip6tables=false`
+  — gVisor does not expose netfilter to the sandbox and dockerd otherwise
+  dies at boot (`Failed to initialize nft: Protocol not supported`). The
+  embedded entrypoint hardcodes these flags.
+- runsc must be registered in `/etc/docker/daemon.json` with runtimeArgs
+  `--net-raw` and `--allow-packet-socket-write` (the latter mandatory for
+  Docker 28+ inner networking, per the gVisor docker-in-gvisor tutorial).
+- No inner storage-driver override is needed: overlayfs via the containerd
+  snapshotter works under runsc; the anonymous-volume `/var/lib/docker`
+  plan stands. Inner `docker build` (buildkit) works.
+- systrap works on arm64 (no ptrace fallback); the .NET actions-runner
+  binary runs under it. Containers see gVisor's synthetic kernel
+  (`4.19.0-gvisor`), not the host kernel.
+- `--cpus`/`--memory` are honored inside the sandbox (`nproc`,
+  `/proc/cpuinfo`, `free` all reflect the limits).
+- Sandbox bring-up adds roughly 2 s per container; steady-state overhead
+  is acceptable for CI.
+
 ## Image bake (`refresh-image`, docker mode)
 
 1. **Resolve runner version** — same policy as the qcow2 bake: query
@@ -159,12 +180,36 @@ fill the host filesystem. (The QEMU backend genuinely enforces it.)
 ## Host requirements (docker backend)
 
 - Docker Engine, with gVisor's `runsc` registered as a runtime in
-  `/etc/docker/daemon.json`
+  `/etc/docker/daemon.json` **including runtimeArgs
+  `--net-raw --allow-packet-socket-write`** (required for inner-Docker
+  networking; validated config):
+  ```json
+  {
+    "runtimes": {
+      "runsc": {
+        "path": "/usr/bin/runsc",
+        "runtimeArgs": ["--net-raw", "--allow-packet-socket-write"]
+      }
+    }
+  }
+  ```
 - gVisor installation is a documented manual prerequisite per distro
   (like QEMU is for the qemu backend); the default systrap platform needs
   no `/dev/kvm` and supports arm64 and x86_64
 - `setup` preflights: docker CLI on PATH, daemon reachable, `runsc`
   registered (via `docker info`), `ghq-runner-base:latest` present
+- **OCI Ubuntu images:** the stock nftables `inet filter` table has a
+  `forward` chain with policy DROP, which silently drops all
+  docker0-bridged traffic *before* Docker's own iptables chains — every
+  container has zero outbound connectivity while the host and
+  `docker pull` work fine. Host provisioning must persist accept rules
+  (e.g. in `/etc/nftables.conf`):
+  ```
+  nft add rule inet filter forward ct state related,established accept
+  nft add rule inet filter forward iifname docker0 accept
+  ```
+  `setup`'s preflight should include an outbound-connectivity check from
+  inside a container to catch this class of host-firewall problem.
 
 ## Error handling
 
@@ -209,7 +254,10 @@ Accepted trade-off: a userspace-kernel sandbox instead of a hardware VM.
 - **Integration smoke** (manual): `setup` → `refresh-image` → one-slot
   docker pool against a scratch repo → trivial workflow incl. a
   `container:` job (exercises inner dockerd) → assert success and full
-  teardown. Natural target: the OCI A1 host.
+  teardown. Natural target: the OCI A1 host, which already has Docker
+  29.5.3 + runsc release-20260601.0 installed and the validated
+  daemon.json in place (the nftables forward rules still need
+  persisting — see Host requirements).
 
 ## Out of scope
 
