@@ -9,3 +9,9 @@ var RunOneJob string
 
 //go:embed guest/bake.sh
 var Bake string
+
+//go:embed docker/Dockerfile
+var Dockerfile string
+
+//go:embed docker/entrypoint.sh
+var DockerEntrypoint string

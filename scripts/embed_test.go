@@ -13,3 +13,12 @@ func TestEmbeddedScripts(t *testing.T) {
 		t.Error("Bake missing expected content")
 	}
 }
+
+func TestDockerAssetsEmbedded(t *testing.T) {
+	if !strings.Contains(Dockerfile, "FROM ubuntu:24.04") {
+		t.Error("Dockerfile missing or wrong base image")
+	}
+	if !strings.Contains(DockerEntrypoint, "--iptables=false") {
+		t.Error("entrypoint must disable inner dockerd iptables (gVisor has no netfilter)")
+	}
+}
