@@ -1,0 +1,3 @@
+# CGO_ENABLED=0 Go binary — static linking is the point (no libc
+# dependency, one deb covers every supported Ubuntu/Debian release).
+github-qemu-runner: statically-linked-binary [usr/bin/github-qemu-runner]
