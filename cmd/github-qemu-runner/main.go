@@ -1,6 +1,7 @@
 // Command github-qemu-runner runs ephemeral GitHub Actions runners in
-// QEMU/KVM virtual machines: `controller` supervises runner pools,
-// `refresh-image` (re)bakes the base VM image, `setup` runs preflight
+// QEMU/KVM virtual machines or gVisor-sandboxed Docker containers:
+// `controller` supervises runner pools, `refresh-image` (re)bakes the
+// base VM image and/or runner container image, `setup` runs preflight
 // checks. See packaging/config.example.yaml for configuration.
 package main
 
@@ -14,10 +15,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/a1678991/github-qemu-runner/internal/config"
 	"github.com/a1678991/github-qemu-runner/internal/controller"
+	"github.com/a1678991/github-qemu-runner/internal/dockerbackend"
 	"github.com/a1678991/github-qemu-runner/internal/github"
 	"github.com/a1678991/github-qemu-runner/internal/imagebake"
 )
@@ -65,16 +68,35 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 	if err != nil {
 		return err
 	}
-	qemuBin, err := exec.LookPath("qemu-system-x86_64")
-	if err != nil {
-		return err
+	if cfg.HasBackend("qemu") {
+		qemuBin, err := exec.LookPath("qemu-system-x86_64")
+		if err != nil {
+			return err
+		}
+		if err := imagebake.Bake(ctx, imagebake.Options{
+			StateDir: cfg.StateDir,
+			APIBase:  cfg.GitHub.APIBaseURL,
+			QEMUBin:  qemuBin,
+			Log:      log,
+		}); err != nil {
+			return err
+		}
 	}
-	return imagebake.Bake(ctx, imagebake.Options{
-		StateDir: cfg.StateDir,
-		APIBase:  cfg.GitHub.APIBaseURL,
-		QEMUBin:  qemuBin,
-		Log:      log,
-	})
+	if cfg.HasBackend("docker") {
+		dockerBin, err := exec.LookPath("docker")
+		if err != nil {
+			return err
+		}
+		if err := dockerbackend.Bake(ctx, dockerbackend.BakeOptions{
+			StateDir:  cfg.StateDir,
+			APIBase:   cfg.GitHub.APIBaseURL,
+			DockerBin: dockerBin,
+			Log:       log,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runSetup(ctx context.Context, configPath string) error {
@@ -94,16 +116,45 @@ func runSetup(ctx context.Context, configPath string) error {
 		return fmt.Errorf("setup found problems")
 	}
 
-	for _, bin := range []string{"qemu-system-x86_64", "qemu-img", "genisoimage"} {
-		_, lookErr := exec.LookPath(bin)
-		check(bin+" on PATH", lookErr)
+	if cfg.HasBackend("qemu") {
+		for _, bin := range []string{"qemu-system-x86_64", "qemu-img", "genisoimage"} {
+			_, lookErr := exec.LookPath(bin)
+			check(bin+" on PATH", lookErr)
+		}
+		kvm, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+		if err == nil {
+			_ = kvm.Close()
+		}
+		check("/dev/kvm read-write access", err)
 	}
 
-	kvm, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
-	if err == nil {
-		_ = kvm.Close()
+	if cfg.HasBackend("docker") {
+		dockerBin, lookErr := exec.LookPath("docker")
+		check("docker on PATH", lookErr)
+		if lookErr == nil {
+			check("docker daemon reachable", exec.CommandContext(ctx, dockerBin, "info").Run())
+			if cfg.Docker.Runtime == "runsc" {
+				out, err := exec.CommandContext(ctx, dockerBin, "info", "--format", "{{json .Runtimes}}").Output()
+				if err == nil && !strings.Contains(string(out), `"runsc"`) {
+					err = fmt.Errorf(`runsc not in docker runtimes — register it in /etc/docker/daemon.json with runtimeArgs ["--net-raw","--allow-packet-socket-write"], then restart docker`)
+				}
+				check("runsc runtime registered", err)
+			} else {
+				fmt.Printf("warn  docker.runtime is runc: job containers run WITHOUT gVisor; --privileged DinD has effectively no isolation boundary\n")
+			}
+			if err := exec.CommandContext(ctx, dockerBin, "image", "inspect", dockerbackend.Image).Run(); err != nil {
+				fmt.Printf("note  runner image missing; run `github-qemu-runner refresh-image`\n")
+			} else {
+				fmt.Printf("ok    runner image %s\n", dockerbackend.Image)
+				// Catches host-firewall problems (e.g. OCI's default
+				// inet-filter forward DROP) that only bite inside containers.
+				check("container outbound connectivity", exec.CommandContext(ctx, dockerBin,
+					"run", "--rm", "--runtime", cfg.Docker.Runtime, "--entrypoint", "curl",
+					dockerbackend.Image, "-fsS", "--max-time", "30",
+					"-o", "/dev/null", "https://api.github.com").Run())
+			}
+		}
 	}
-	check("/dev/kvm read-write access", err)
 
 	keyPEM, err := os.ReadFile(cfg.GitHub.PrivateKeyPath)
 	check("private key readable", err)
@@ -116,11 +167,13 @@ func runSetup(ctx context.Context, configPath string) error {
 		}
 	}
 
-	base := filepath.Join(cfg.StateDir, "images", "base.qcow2")
-	if _, err := os.Stat(base); err != nil {
-		fmt.Printf("note  base image missing; run `github-qemu-runner refresh-image`\n")
-	} else {
-		fmt.Printf("ok    base image %s\n", base)
+	if cfg.HasBackend("qemu") {
+		base := filepath.Join(cfg.StateDir, "images", "base.qcow2")
+		if _, err := os.Stat(base); err != nil {
+			fmt.Printf("note  base image missing; run `github-qemu-runner refresh-image`\n")
+		} else {
+			fmt.Printf("ok    base image %s\n", base)
+		}
 	}
 
 	for _, w := range cfg.CapacityWarnings(runtime.NumCPU(), controller.HostMemMB()) {
