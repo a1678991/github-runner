@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.0](https://github.com/a1678991/github-qemu-runner/compare/v0.1.0...v0.2.0) (2026-06-11)
+
+
+### Features
+
+* **cli:** docker-aware refresh-image and setup preflights ([1d15637](https://github.com/a1678991/github-qemu-runner/commit/1d15637b4673541558f54608a7f94f6d0d3fdf1f))
+* **config:** per-pool backend field and docker.runtime section ([3663e11](https://github.com/a1678991/github-qemu-runner/commit/3663e113a997340fec3fc6a81c2f671a6a56f13e))
+* **controller:** per-backend preflight and provisioner wiring ([9500454](https://github.com/a1678991/github-qemu-runner/commit/9500454dc58b1be66ac1dd45ba86a610e1d11cde))
+* Docker backend with gVisor-sandboxed ephemeral runners ([2c1f4b4](https://github.com/a1678991/github-qemu-runner/commit/2c1f4b47802cdcc362b211c52c74c6e5c1f7d759))
+* **dockerbackend:** bake runner image via docker build ([dfa9ac7](https://github.com/a1678991/github-qemu-runner/commit/dfa9ac7d87e2d6e8f77e9c430e2a8dc353e0a8a2))
+* **dockerbackend:** container supervisor implementing pool.VM ([197f473](https://github.com/a1678991/github-qemu-runner/commit/197f473ee2e59f46d5bb6227768157ef0e58ce57))
+* **dockerbackend:** docker run argv builder and arch mapping ([45460f8](https://github.com/a1678991/github-qemu-runner/commit/45460f856a4d669e59b99303d0796fbd353c2091))
+* **dockerbackend:** embedded runner-image Dockerfile and entrypoint ([d3ba3e9](https://github.com/a1678991/github-qemu-runner/commit/d3ba3e95a4f2d5013e9f90295c0344cb53eb5697))
+* **dockerbackend:** orphan container reaping ([18af92c](https://github.com/a1678991/github-qemu-runner/commit/18af92c7916b711127e9d249bef25742299a2ccb))
+* **dockerbackend:** per-job container provisioner ([b9ab8c3](https://github.com/a1678991/github-qemu-runner/commit/b9ab8c3ce58896bc5b4142d242a2dd1fbfd7d97f))
+* **imagebake:** parameterize LatestRunner by runner arch ([f9f2b27](https://github.com/a1678991/github-qemu-runner/commit/f9f2b272c560aca85f858da7dc96899e51f0a795))
+* **packaging:** deb package via nfpm (arm64 + amd64) ([1b687d8](https://github.com/a1678991/github-qemu-runner/commit/1b687d8e5a32a127a624bb57f90cd3d0c02a1e05))
+* **packaging:** Debian package for Ubuntu 24.04 (arm64 + amd64) ([d0ee1cd](https://github.com/a1678991/github-qemu-runner/commit/d0ee1cdc4655f71358447ade1980252323aa45dd))
+
+
+### Bug Fixes
+
+* **dockerbackend:** bound Kill against hung daemon, surface docker wait stderr ([6665a50](https://github.com/a1678991/github-qemu-runner/commit/6665a50fed35413665b3740d6996b825cac808c2))
+* **dockerbackend:** harden runner image per code review ([ba1f704](https://github.com/a1678991/github-qemu-runner/commit/ba1f70473939d7aaea38cdabfa8b1f9cecccca3a))
+* **dockerbackend:** tighten Powerdown post-stop wait, document signal path ([c7b9917](https://github.com/a1678991/github-qemu-runner/commit/c7b9917dc99c7557af1e02bd0c7d0760bfed4bf3))
+* **imagebake:** scrape tarball SHA from checksum markers, not first hex match ([ac035d3](https://github.com/a1678991/github-qemu-runner/commit/ac035d39fe24f73556dc5954b3bd83c50e7ba70c))
+
 ## 0.1.0 (2026-06-11)
 
 
