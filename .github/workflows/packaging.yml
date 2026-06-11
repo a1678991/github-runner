@@ -56,6 +56,56 @@ jobs:
           name: arch-package
           path: /home/builder/src/packaging/arch/*.pkg.tar.zst
 
+  arch-release-package:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      # git must exist before checkout; base-devel does not include it
+      - run: pacman -Syu --noconfirm git go qemu-base cdrtools namcap
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare non-root builder copy
+        run: |
+          useradd -m builder
+          git config --system --add safe.directory '*'
+          ver=$(sed -n 's/^pkgver=\([0-9.]*\).*/\1/p' packaging/arch/release/PKGBUILD)
+          test -n "$ver" || { echo '::error::failed to extract pkgver from PKGBUILD'; exit 1; }
+          cp -r packaging/arch/release /home/builder/build
+          # The release PKGBUILD sources the tag tarball, which does not
+          # exist for unreleased code; build from this checkout instead.
+          git archive --format=tar.gz --prefix="github-qemu-runner-$ver/" \
+            -o "/home/builder/build/github-qemu-runner-$ver.tar.gz" HEAD
+          # shellcheck disable=SC2016 # $url/$pkgver must stay literal for sed
+          sed -i 's|::$url/archive/v$pkgver.tar.gz||' /home/builder/build/PKGBUILD
+          grep -qF "source=(\"\$pkgname-\$pkgver.tar.gz\")" /home/builder/build/PKGBUILD \
+            || { echo '::error::source swap sed did not match'; exit 1; }
+          chown -R builder:builder /home/builder/build
+      - name: Build package
+        run: su builder -c 'cd /home/builder/build && makepkg --noconfirm'
+      - name: namcap (fail on errors only)
+        run: |
+          cd /home/builder/build
+          namcap ./*.pkg.tar.zst | tee /tmp/namcap.out || true
+          if grep ' E: ' /tmp/namcap.out; then
+            echo '::error::namcap reported errors'
+            exit 1
+          fi
+      - name: Install and smoke test
+        run: |
+          cd /home/builder/build
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          rc=0; github-qemu-runner nonsense || rc=$?
+          test "$rc" -eq 2
+          pacman -Ql github-qemu-runner | grep sysusers.d
+          pacman -Ql github-qemu-runner | grep tmpfiles.d
+          execstart=$(grep '^ExecStart=' /usr/lib/systemd/system/github-qemu-runner.service | cut -d= -f2- | awk '{print $1}')
+          test -x "$execstart"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: arch-release-package
+          path: /home/builder/build/*.pkg.tar.zst
+
   nix:
     runs-on: ubuntu-latest
     steps:
