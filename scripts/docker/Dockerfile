@@ -6,6 +6,9 @@ ARG RUNNER_VERSION
 ARG RUNNER_TARBALL_URL
 ARG RUNNER_TARBALL_SHA256
 
+LABEL org.opencontainers.image.title="ghq-runner-base" \
+      org.opencontainers.image.version="${RUNNER_VERSION}"
+
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates curl git && \
     install -m 0755 -d /etc/apt/keyrings && \
@@ -21,12 +24,12 @@ RUN useradd --create-home --uid 1001 runner && usermod -aG docker runner
 
 RUN mkdir -p /opt/actions-runner && cd /opt/actions-runner && \
     curl -fsSL -o runner.tar.gz "$RUNNER_TARBALL_URL" && \
-    { [ -z "$RUNNER_TARBALL_SHA256" ] || echo "$RUNNER_TARBALL_SHA256  runner.tar.gz" | sha256sum -c -; } && \
+    { if [ -z "$RUNNER_TARBALL_SHA256" ]; then echo "WARNING: RUNNER_TARBALL_SHA256 empty; skipping tarball integrity check" >&2; else echo "$RUNNER_TARBALL_SHA256  runner.tar.gz" | sha256sum -c -; fi; } && \
     tar xzf runner.tar.gz && rm runner.tar.gz && \
     apt-get update && ./bin/installdependencies.sh && rm -rf /var/lib/apt/lists/* && \
     chown -R runner:runner /opt/actions-runner
 
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Anonymous volume so inner-docker state never lands on the container's
 # overlay; removed with the container (docker rm --volumes).
