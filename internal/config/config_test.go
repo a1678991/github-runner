@@ -211,3 +211,76 @@ func TestRepoScopeRejectsCustomGroup(t *testing.T) {
 		t.Fatalf("want Default-group error, got %v", err)
 	}
 }
+
+const dockerPoolYAML = `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key_path: /tmp/key.pem
+pools:
+  - name: oci
+    backend: docker
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 2
+    memory_mb: 2048
+    disk_gb: 20
+    labels: [self-hosted, linux, arm64]
+`
+
+func TestBackendDefaultsToQEMU(t *testing.T) {
+	c, err := Load(writeConfig(t, strings.Replace(dockerPoolYAML, "    backend: docker\n", "", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Pools[0].Backend; got != "qemu" {
+		t.Errorf("default backend = %q, want qemu", got)
+	}
+	if c.HasBackend("docker") {
+		t.Error("HasBackend(docker) = true for qemu-only config")
+	}
+	if !c.HasBackend("qemu") {
+		t.Error("HasBackend(qemu) = false for qemu-only config")
+	}
+}
+
+func TestDockerBackendAndRuntime(t *testing.T) {
+	c, err := Load(writeConfig(t, dockerPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Pools[0].Backend; got != "docker" {
+		t.Errorf("backend = %q, want docker", got)
+	}
+	if got := c.Docker.Runtime; got != "runsc" {
+		t.Errorf("default docker.runtime = %q, want runsc", got)
+	}
+	if !c.HasBackend("docker") || c.HasBackend("qemu") {
+		t.Error("HasBackend wrong for docker-only config")
+	}
+}
+
+func TestDockerRuntimeRuncAccepted(t *testing.T) {
+	c, err := Load(writeConfig(t, "docker:\n  runtime: runc\n"+dockerPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Docker.Runtime; got != "runc" {
+		t.Errorf("docker.runtime = %q, want runc", got)
+	}
+}
+
+func TestInvalidBackendRejected(t *testing.T) {
+	_, err := Load(writeConfig(t, strings.Replace(dockerPoolYAML, "backend: docker", "backend: podman", 1)))
+	if err == nil || !strings.Contains(err.Error(), "backend") {
+		t.Errorf("want backend validation error, got %v", err)
+	}
+}
+
+func TestInvalidDockerRuntimeRejected(t *testing.T) {
+	_, err := Load(writeConfig(t, "docker:\n  runtime: kata\n"+dockerPoolYAML))
+	if err == nil || !strings.Contains(err.Error(), "runtime") {
+		t.Errorf("want runtime validation error, got %v", err)
+	}
+}
