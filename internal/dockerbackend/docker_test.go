@@ -64,6 +64,9 @@ func TestProvisionLifecycle(t *testing.T) {
 	if !strings.Contains(string(argv), "run --detach --name ghq-oci-ab12 --runtime runsc --privileged") {
 		t.Errorf("docker run argv wrong:\n%s", argv)
 	}
+	if strings.Contains(string(argv), "JITBLOB") {
+		t.Error("jit blob leaked into docker argv (must reach the container only via the bind-mounted file)")
+	}
 
 	select {
 	case <-vm.Done():
