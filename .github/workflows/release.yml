@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create tags and releases
+      pull-requests: write # open/update release PRs
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        id: release
+
+  arch-package:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    container: archlinux:base-devel
+    steps:
+      # git must exist before checkout; base-devel does not include it.
+      # pacman-contrib provides updpkgsums, github-cli provides gh.
+      - run: pacman -Syu --noconfirm git go qemu-base cdrtools namcap pacman-contrib github-cli
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - name: Prepare non-root builder copy
+        run: |
+          useradd -m builder
+          cp -r packaging/arch/release /home/builder/build
+          chown -R builder:builder /home/builder/build
+      - name: Build package
+        # updpkgsums fetches the tag tarball (created by the release-please
+        # job moments ago) and fills sha256sums before makepkg verifies it.
+        # The archive can lag tag creation by a few seconds, hence the retry.
+        run: |
+          runuser -u builder -- bash -s <<'EOF'
+          set -euo pipefail
+          cd /home/builder/build
+          for attempt in 1 2 3 4 5; do
+            if updpkgsums; then
+              break
+            fi
+            echo "updpkgsums attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          if grep -q "sha256sums=('SKIP')" PKGBUILD; then
+            echo "::error::updpkgsums never filled sha256sums; tag archive unavailable?"
+            exit 1
+          fi
+          makepkg --noconfirm
+          EOF
+      - name: namcap (fail on errors only)
+        run: |
+          cd /home/builder/build
+          namcap ./*.pkg.tar.zst | tee /tmp/namcap.out || true
+          if grep ' E: ' /tmp/namcap.out; then
+            echo '::error::namcap reported errors'
+            exit 1
+          fi
+      - name: Install and smoke test
+        run: |
+          cd /home/builder/build
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          rc=0; github-qemu-runner nonsense || rc=$?
+          test "$rc" -eq 2
+          pacman -Ql github-qemu-runner | grep sysusers.d
+          pacman -Ql github-qemu-runner | grep tmpfiles.d
+          execstart=$(grep '^ExecStart=' /usr/lib/systemd/system/github-qemu-runner.service | cut -d= -f2- | awk '{print $1}')
+          test -x "$execstart"
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          cd /home/builder/build
+          for f in *.pkg.tar.zst; do sha256sum "$f" > "$f.sha256"; done
+          gh release upload "$TAG" ./*.pkg.tar.zst ./*.pkg.tar.zst.sha256 --clobber
+
+  tarball:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath -o github-qemu-runner ./cmd/github-qemu-runner
+      - name: Smoke test
+        run: |
+          rc=0; ./github-qemu-runner nonsense || rc=$?
+          test "$rc" -eq 2
+      - name: Pack
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          dir="github-qemu-runner_${TAG#v}_linux_amd64"
+          mkdir "$dir"
+          cp github-qemu-runner LICENSE README.md \
+            packaging/config.example.yaml packaging/github-qemu-runner.service "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" ./*.tar.gz ./*.tar.gz.sha256 --clobber
