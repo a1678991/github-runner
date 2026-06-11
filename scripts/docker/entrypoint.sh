@@ -30,4 +30,7 @@ cd /opt/actions-runner || exit 1
 # The JIT config registers a pre-created ephemeral runner; run.sh executes
 # one job, deregisters, and exits. The blob is single-use, so its
 # visibility in container-internal argv is harmless.
+# On `docker stop`, SIGTERM lands on runuser (PID 1 after exec) and its
+# forwarding to the runner is best-effort; docker's TERM->KILL escalation
+# is the safety net, same outcome as the qemu backend's drain timeout.
 exec runuser -u runner -- ./run.sh --jitconfig "$(cat "$JIT_FILE")"

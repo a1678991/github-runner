@@ -85,10 +85,13 @@ func (c *Container) Powerdown(timeout time.Duration) error {
 	if err := exec.Command(c.bin, "stop", "--time", strconv.Itoa(secs), c.name).Run(); err != nil {
 		return c.Kill()
 	}
+	// docker stop blocks through its own TERM->KILL escalation, so the
+	// container is already stopped here; this only waits for the watcher
+	// (docker wait) to observe the exit.
 	select {
 	case <-c.done:
 		return nil
-	case <-time.After(timeout + 30*time.Second):
+	case <-time.After(30 * time.Second):
 		return c.Kill()
 	}
 }
