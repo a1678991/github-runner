@@ -14,3 +14,13 @@ node_modules/
 # editor / OS
 *.swp
 .DS_Store
+
+# makepkg artifacts (local builds)
+packaging/arch/pkg/
+packaging/arch/src/
+packaging/arch/github-qemu-runner-git/
+packaging/arch/*.pkg.tar.zst
+packaging/arch/release/pkg/
+packaging/arch/release/src/
+packaging/arch/release/*.pkg.tar.zst
+packaging/arch/release/*.tar.gz
