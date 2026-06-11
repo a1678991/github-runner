@@ -30,6 +30,7 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 type Config struct {
 	GitHub   GitHub `yaml:"github"`
 	StateDir string `yaml:"state_dir"`
+	Docker   Docker `yaml:"docker"`
 	Pools    []Pool `yaml:"pools"`
 }
 
@@ -40,8 +41,16 @@ type GitHub struct {
 	APIBaseURL     string `yaml:"api_base_url"`
 }
 
+// Docker configures the docker backend (pools with backend: docker).
+type Docker struct {
+	// Runtime is the container runtime for job containers: "runsc"
+	// (gVisor, the default) or "runc" (no sandbox — see README warnings).
+	Runtime string `yaml:"runtime"`
+}
+
 type Pool struct {
 	Name            string   `yaml:"name"`
+	Backend         string   `yaml:"backend"`
 	Scope           string   `yaml:"scope"`
 	Org             string   `yaml:"org"`
 	Repo            string   `yaml:"repo"`
@@ -96,8 +105,14 @@ func (c *Config) applyDefaults() {
 	// Lets the systemd unit pass the App key via LoadCredential:
 	// private_key_path: ${CREDENTIALS_DIRECTORY}/app-key.pem
 	c.GitHub.PrivateKeyPath = os.ExpandEnv(c.GitHub.PrivateKeyPath)
+	if c.Docker.Runtime == "" {
+		c.Docker.Runtime = "runsc"
+	}
 	for i := range c.Pools {
 		p := &c.Pools[i]
+		if p.Backend == "" {
+			p.Backend = "qemu"
+		}
 		if p.RunnerGroup == "" {
 			p.RunnerGroup = "Default"
 		}
@@ -123,6 +138,9 @@ func (c *Config) validate() error {
 	if len(c.Pools) == 0 {
 		return fmt.Errorf("at least one pool is required")
 	}
+	if c.Docker.Runtime != "runsc" && c.Docker.Runtime != "runc" {
+		return fmt.Errorf(`docker.runtime must be "runsc" or "runc"`)
+	}
 	seen := map[string]bool{}
 	for _, p := range c.Pools {
 		if !poolNameRe.MatchString(p.Name) {
@@ -132,6 +150,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("duplicate pool name %q", p.Name)
 		}
 		seen[p.Name] = true
+		if p.Backend != "qemu" && p.Backend != "docker" {
+			return fmt.Errorf(`pool %s: backend must be "qemu" or "docker"`, p.Name)
+		}
 		switch p.Scope {
 		case "org":
 			if p.Org == "" {
@@ -189,4 +210,14 @@ func (c *Config) CapacityWarnings(hostCPUs, hostMemMB int) []string {
 		w = append(w, fmt.Sprintf("pools may use %d MiB RAM but host has %d MiB", mem, hostMemMB))
 	}
 	return w
+}
+
+// HasBackend reports whether any pool uses the given backend.
+func (c *Config) HasBackend(b string) bool {
+	for _, p := range c.Pools {
+		if p.Backend == b {
+			return true
+		}
+	}
+	return false
 }

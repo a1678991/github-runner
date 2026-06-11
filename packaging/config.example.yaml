@@ -11,6 +11,11 @@ github:
 
 # state_dir: /var/lib/github-qemu-runner
 
+# Docker backend (for hosts without /dev/kvm). Jobs run in gVisor-sandboxed
+# containers; see "Docker backend" in the README for host prerequisites.
+#docker:
+#  runtime: runsc        # runsc (default) | runc (NO sandbox — read README first)
+
 pools:
   - name: fmt
     scope: org # org | repo (repo also needs `repo: owner/name`)
@@ -31,3 +36,12 @@ pools:
     memory_mb: 16384
     disk_gb: 60
     labels: [self-hosted, linux, x64, build]
+  #- name: oci-arm
+  #  backend: docker     # qemu (default) | docker
+  #  scope: org
+  #  org: my-org
+  #  count: 2
+  #  cpus: 2
+  #  memory_mb: 8192
+  #  disk_gb: 30         # advisory only on docker pools (not enforced)
+  #  labels: [self-hosted, linux, arm64, oci]

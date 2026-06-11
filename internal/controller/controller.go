@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/a1678991/github-qemu-runner/internal/config"
+	"github.com/a1678991/github-qemu-runner/internal/dockerbackend"
 	"github.com/a1678991/github-qemu-runner/internal/github"
 	"github.com/a1678991/github-qemu-runner/internal/pool"
 )
@@ -30,20 +31,44 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	gh := github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.AppID, cfg.GitHub.InstallationID, key)
 
-	qemuBin, err := exec.LookPath("qemu-system-x86_64")
-	if err != nil {
-		return fmt.Errorf("qemu-system-x86_64 not found: %w", err)
-	}
-	basePath, err := filepath.Abs(filepath.Join(cfg.StateDir, "images", "base.qcow2"))
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(basePath); err != nil {
-		return fmt.Errorf("base image missing (run `github-qemu-runner refresh-image` first): %w", err)
-	}
 	runDir := filepath.Join(cfg.StateDir, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return err
+	}
+
+	var qemuProv *QEMUProvisioner
+	if cfg.HasBackend("qemu") {
+		qemuBin, err := exec.LookPath("qemu-system-x86_64")
+		if err != nil {
+			return fmt.Errorf("qemu-system-x86_64 not found: %w", err)
+		}
+		basePath, err := filepath.Abs(filepath.Join(cfg.StateDir, "images", "base.qcow2"))
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(basePath); err != nil {
+			return fmt.Errorf("base image missing (run `github-qemu-runner refresh-image` first): %w", err)
+		}
+		qemuProv = &QEMUProvisioner{RunDir: runDir, BasePath: basePath, QEMUBin: qemuBin}
+	}
+
+	var dockerProv *dockerbackend.Provisioner
+	if cfg.HasBackend("docker") {
+		dockerBin, err := exec.LookPath("docker")
+		if err != nil {
+			return fmt.Errorf("docker not found: %w", err)
+		}
+		if err := exec.CommandContext(ctx, dockerBin, "image", "inspect", dockerbackend.Image).Run(); err != nil {
+			return fmt.Errorf("runner image %s missing (run `github-qemu-runner refresh-image` first): %w", dockerbackend.Image, err)
+		}
+		if cfg.Docker.Runtime == "runc" {
+			log.Warn("docker pools run WITHOUT gVisor (docker.runtime: runc): " +
+				"--privileged DinD containers have effectively no isolation boundary")
+		}
+		// Containers reference jit mounts under runDir, so reap them
+		// before ReapOrphans deletes the workdirs.
+		dockerbackend.ReapContainers(ctx, dockerBin, log)
+		dockerProv = &dockerbackend.Provisioner{RunDir: runDir, DockerBin: dockerBin, Runtime: cfg.Docker.Runtime}
 	}
 
 	for _, w := range cfg.CapacityWarnings(runtime.NumCPU(), HostMemMB()) {
@@ -52,9 +77,12 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	ReapOrphans(ctx, runDir, gh, apiPrefixes(cfg), log)
 
-	prov := &QEMUProvisioner{RunDir: runDir, BasePath: basePath, QEMUBin: qemuBin}
 	var wg sync.WaitGroup
 	for _, pc := range cfg.Pools {
+		var prov pool.Provisioner = qemuProv
+		if pc.Backend == "docker" {
+			prov = dockerProv
+		}
 		p := &pool.Pool{Cfg: pc, GH: gh, Prov: prov, Log: log}
 		wg.Add(1)
 		go func() {
