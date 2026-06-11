@@ -2,7 +2,8 @@
 
 Ephemeral GitHub Actions self-hosted runners on Linux. Every job runs in a
 disposable QEMU/KVM virtual machine that is destroyed afterwards — the VM is
-the isolation boundary. Linux sibling of
+the isolation boundary. A gVisor-sandboxed Docker backend is available as a
+fallback for hosts without `/dev/kvm` (see below). Linux sibling of
 [github-tart-runner](https://github.com/a1678991/github-tart-runner) (macOS).
 
 Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
@@ -23,6 +24,64 @@ slot, forever:
 actions-runner (latest, checksum-verified), flattened to
 `/var/lib/github-qemu-runner/images/base.qcow2`.
 
+## Docker backend (hosts without /dev/kvm)
+
+Pools with `backend: docker` run each job in a disposable Docker container
+sandboxed by gVisor instead of a VM — for hosts without nested
+virtualization (e.g. OCI Ampere A1 free-tier instances) and for arm64.
+Jobs keep full Docker support: a private dockerd runs *inside* the
+sandboxed container (DinD), so `container:` jobs, service containers, and
+`docker build` work as on the QEMU backend.
+
+Security trade-off, explicitly: gVisor is a userspace-kernel sandbox —
+weaker than a KVM VM, far stronger than a plain container. The job
+container runs `--privileged` so the inner dockerd works; under `runsc`
+those privileges apply to gVisor's synthetic kernel, not the host. Setting
+`docker.runtime: runc` removes the sandbox entirely and `--privileged`
+becomes root on the host — never do this on a machine you care about.
+`disk_gb` is advisory on docker pools (standard storage drivers cannot
+enforce per-container quotas); a runaway job can fill the host filesystem.
+
+Host prerequisites:
+
+1. Docker Engine, with the `gh-runner` user in the `docker` group
+   (docker-socket access is root-equivalent — this is the documented
+   widening vs. the qemu backend's kvm-group-only posture).
+2. gVisor (`runsc`) from [gvisor.dev](https://gvisor.dev/docs/user_guide/install/),
+   registered in `/etc/docker/daemon.json`:
+
+   ```json
+   {
+     "runtimes": {
+       "runsc": {
+         "path": "/usr/bin/runsc",
+         "runtimeArgs": ["--net-raw", "--allow-packet-socket-write"]
+       }
+     }
+   }
+   ```
+
+   Both runtimeArgs are required for networking inside the inner dockerd
+   (the second is mandatory with Docker 28+). Restart docker after editing.
+3. **OCI Ubuntu images only:** the stock nftables `inet filter` table has
+   a `forward` chain with policy DROP that silently kills all container
+   traffic *before* Docker's own rules. Persist accept rules (e.g. in
+   `/etc/nftables.conf`):
+
+   ```
+   nft add rule inet filter forward ct state related,established accept
+   nft add rule inet filter forward iifname docker0 accept
+   ```
+
+   `setup` runs an outbound-connectivity check from inside a container to
+   catch exactly this.
+
+Then: `setup` → `refresh-image` (builds the `ghq-runner-base:latest` image
+natively, so the arch always matches the host) → `systemctl enable --now
+github-qemu-runner`. Label docker pools with the real architecture (e.g.
+`arm64`), and as with the qemu backend: never attach runners to public
+repositories.
+
 ## Requirements
 
 - Linux host with `/dev/kvm`, systemd
@@ -30,6 +89,8 @@ actions-runner (latest, checksum-verified), flattened to
   (Arch: `pacman -S qemu-base cdrtools`; Debian/Ubuntu: `apt install qemu-system-x86 qemu-utils genisoimage`)
 - A GitHub App with **Self-hosted runners: Read & write** (org) and/or
   **Administration: Read & write** (repo), installed on the target org/repos
+
+The docker backend has different host prerequisites — see "Docker backend" below.
 
 ## Install (manual)
 
@@ -131,7 +192,7 @@ jobs:
 | Logs | `journalctl -u github-qemu-runner -f` |
 | Per-VM console | `/var/lib/github-qemu-runner/run/<vm>/console.log` (gone after teardown) |
 | Refresh base image | `sudo -u gh-runner github-qemu-runner refresh-image` (monthly, or after runner/Ubuntu releases; running VMs are unaffected, new VMs pick it up) |
-| Image provenance | `/var/lib/github-qemu-runner/images/base.json` |
+| Image provenance | `/var/lib/github-qemu-runner/images/base.json` (qemu), `/var/lib/github-qemu-runner/images/docker-base.json` (docker) |
 | Stop (drains) | `systemctl stop github-qemu-runner` — idle runners are deregistered immediately; busy ones get `drain_timeout` (default 30 min) to finish |
 | Crash recovery | automatic: systemd restarts; startup reaping kills orphan VMs and deletes stale `ghq-*` runner records |
 
