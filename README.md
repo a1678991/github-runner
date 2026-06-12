@@ -17,7 +17,8 @@ Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
   `disk_gb`), labels, and `org` or `repo` registration scope
 - Optional [runner groups](#runner-groups) on org-scoped pools
 - Optional [Docker backend](#docker-backend-hosts-without-devkvm) for hosts
-  without KVM and for arm64
+  without KVM and for arm64, with per-pool `isolation: gvisor | seccomp`
+  (seccomp = native-runc speed for jobs that don't need Docker inside)
 - GitHub Enterprise Server support via `github.api_base_url`
 - Graceful drain on stop (busy runners get `drain_timeout` to finish);
   automatic crash recovery with orphan VM/record reaping on startup
@@ -57,6 +58,42 @@ those privileges apply to gVisor's synthetic kernel, not the host. Setting
 becomes root on the host — never do this on a machine you care about.
 `disk_gb` is advisory on docker pools (standard storage drivers cannot
 enforce per-container quotas); a runaway job can fill the host filesystem.
+
+### Seccomp isolation mode (higher performance, no Docker-in-job)
+
+Docker pools that don't need Docker inside the job (build / test / lint
+workloads) can opt into `isolation: seccomp` per pool:
+
+```yaml
+pools:
+  - name: fast
+    backend: docker
+    isolation: seccomp   # gvisor (default) | seccomp
+    # seccomp_profile: /etc/ghq/strict.json   # optional custom profile
+    ...
+```
+
+The job container then runs under native `runc` **without** `--privileged`,
+so Docker's default seccomp profile and capability bounding apply (plus
+`NET_RAW`/`MKNOD` dropped — `ping` won't work inside jobs). This removes
+gVisor's syscall-interception overhead entirely; gVisor is not even required
+on the host if every docker pool uses seccomp isolation.
+
+Trade-offs, explicitly:
+
+- **Weaker than gVisor:** the job shares the host kernel behind the standard
+  container boundary (namespaces + cgroups + seccomp allowlist + capability
+  bounding). A kernel 0-day reachable through allowlisted syscalls escapes.
+  Isolation ladder: qemu > gvisor > seccomp > `docker.runtime: runc`
+  (privileged + unconfined — note seccomp mode is strictly *stronger* than
+  that escape hatch).
+- **No Docker inside jobs:** `container:` jobs, service containers, and
+  `docker build` fail (the slim image `ghq-runner-slim:latest` ships no
+  Docker Engine). Keep such jobs on a gvisor pool — one host can run both.
+- `sudo`/`apt-get` keep working (GitHub-hosted parity); `docker.runtime` is
+  ignored by seccomp pools.
+- `seccomp_profile` (absolute path) swaps in a custom profile instead of
+  Docker's built-in default; it can tighten the sandbox, never disable it.
 
 Host prerequisites:
 
