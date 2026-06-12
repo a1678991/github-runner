@@ -58,11 +58,31 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("docker not found: %w", err)
 		}
-		if err := exec.CommandContext(ctx, dockerBin, "image", "inspect", dockerbackend.Image).Run(); err != nil {
-			return fmt.Errorf("runner image %s missing (run `github-qemu-runner refresh-image` first): %w", dockerbackend.Image, err)
+		for _, v := range []struct {
+			image string
+			used  bool
+		}{
+			{dockerbackend.Image, cfg.HasDockerIsolation("gvisor")},
+			{dockerbackend.SlimImage, cfg.HasDockerIsolation("seccomp")},
+		} {
+			if !v.used {
+				continue
+			}
+			if err := exec.CommandContext(ctx, dockerBin, "image", "inspect", v.image).Run(); err != nil {
+				return fmt.Errorf("runner image %s missing (run `github-qemu-runner refresh-image` first): %w", v.image, err)
+			}
 		}
-		if cfg.Docker.Runtime == "runc" {
-			log.Warn("docker pools run WITHOUT gVisor (docker.runtime: runc): " +
+		// Fail at startup, not at the first job, on a missing custom profile.
+		for _, p := range cfg.Pools {
+			if p.SeccompProfile == "" {
+				continue
+			}
+			if _, err := os.Stat(p.SeccompProfile); err != nil {
+				return fmt.Errorf("pool %s: seccomp_profile: %w", p.Name, err)
+			}
+		}
+		if cfg.Docker.Runtime == "runc" && cfg.HasDockerIsolation("gvisor") {
+			log.Warn("gvisor-isolation pools run WITHOUT gVisor (docker.runtime: runc): " +
 				"--privileged DinD containers have effectively no isolation boundary")
 		}
 		// Containers reference jit mounts under runDir, so reap them
