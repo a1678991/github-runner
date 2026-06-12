@@ -1,7 +1,10 @@
-# Runner image for the docker backend: Ubuntu 24.04 + Docker Engine
-# (DinD, run inside gVisor) + actions-runner. Built locally by
+# Runner images for the docker backend, built locally by
 # `github-qemu-runner refresh-image`; never pushed to a registry.
-FROM ubuntu:24.04
+#   --target dind -> ghq-runner-base:latest  (Docker Engine inside, for
+#       isolation: gvisor pools; run with --runtime runsc --privileged)
+#   --target slim -> ghq-runner-slim:latest  (no Docker Engine, for
+#       isolation: seccomp pools; native runc, no --privileged)
+FROM ubuntu:24.04 AS base
 ARG RUNNER_VERSION
 ARG RUNNER_TARBALL_URL
 ARG RUNNER_TARBALL_SHA256
@@ -11,19 +14,12 @@ LABEL org.opencontainers.image.title="ghq-runner-base" \
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates curl git sudo && \
-    install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
-        > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        docker-ce docker-ce-cli containerd.io docker-buildx-plugin && \
     rm -rf /var/lib/apt/lists/*
 
 # uid 1001: ubuntu:24.04 ships an "ubuntu" user at 1000. Passwordless sudo
 # matches GitHub-hosted images; the disposable sandbox is the trust
-# boundary, and runner is already in the docker group (root-equivalent
-# inside the container).
-RUN useradd --create-home --uid 1001 runner && usermod -aG docker runner && \
+# boundary.
+RUN useradd --create-home --uid 1001 runner && \
     echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner && \
     chmod 0440 /etc/sudoers.d/runner
 
@@ -34,10 +30,28 @@ RUN mkdir -p /opt/actions-runner && cd /opt/actions-runner && \
     apt-get update && ./bin/installdependencies.sh && rm -rf /var/lib/apt/lists/* && \
     chown -R runner:runner /opt/actions-runner
 
+# DinD variant: Docker Engine + entrypoint that boots the inner dockerd.
+# runner joins the docker group (root-equivalent inside the container).
+FROM base AS dind
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
+        > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin && \
+    rm -rf /var/lib/apt/lists/* && \
+    usermod -aG docker runner
+
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Anonymous volume so inner-docker state never lands on the container's
 # overlay; removed with the container (docker rm --volumes).
 VOLUME /var/lib/docker
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Slim variant: no Docker Engine. A job step that runs `docker` fails with
+# command-not-found, which is the accurate error for a seccomp pool.
+FROM base AS slim
+COPY --chmod=0755 entrypoint-slim.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
