@@ -10,7 +10,7 @@ LABEL org.opencontainers.image.title="ghq-runner-base" \
       org.opencontainers.image.version="${RUNNER_VERSION}"
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl git && \
+        ca-certificates curl git sudo && \
     install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
@@ -19,8 +19,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin && \
     rm -rf /var/lib/apt/lists/*
 
-# uid 1001: ubuntu:24.04 ships an "ubuntu" user at 1000.
-RUN useradd --create-home --uid 1001 runner && usermod -aG docker runner
+# uid 1001: ubuntu:24.04 ships an "ubuntu" user at 1000. Passwordless sudo
+# matches GitHub-hosted images; the disposable sandbox is the trust
+# boundary, and runner is already in the docker group (root-equivalent
+# inside the container).
+RUN useradd --create-home --uid 1001 runner && usermod -aG docker runner && \
+    echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner && \
+    chmod 0440 /etc/sudoers.d/runner
 
 RUN mkdir -p /opt/actions-runner && cd /opt/actions-runner && \
     curl -fsSL -o runner.tar.gz "$RUNNER_TARBALL_URL" && \

@@ -13,10 +13,14 @@ source /run/bake-env
 export DEBIAN_FRONTEND=noninteractive
 
 useradd --create-home --shell /bin/bash runner
+# Passwordless sudo matches GitHub-hosted images; the disposable VM is the
+# trust boundary, and runner is in the docker group (root-equivalent) anyway.
+echo 'runner ALL=(ALL) NOPASSWD:ALL' >/etc/sudoers.d/runner
+chmod 0440 /etc/sudoers.d/runner
 
 apt-get update
 apt-get install -y --no-install-recommends \
-  git curl ca-certificates jq build-essential docker.io
+  git curl ca-certificates jq build-essential sudo docker.io
 usermod -aG docker runner
 systemctl enable docker
 
