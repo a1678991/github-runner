@@ -1,5 +1,6 @@
 // Command github-qemu-runner runs ephemeral GitHub Actions runners in
-// QEMU/KVM virtual machines or gVisor-sandboxed Docker containers:
+// QEMU/KVM virtual machines or sandboxed Docker containers (per-pool
+// gvisor or seccomp isolation):
 // `controller` supervises runner pools, `refresh-image` (re)bakes the
 // base VM image and/or runner container image, `setup` runs preflight
 // checks. See packaging/config.example.yaml for configuration.

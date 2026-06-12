@@ -1,5 +1,6 @@
 // Package dockerbackend runs ephemeral runner jobs in Docker containers
-// sandboxed by gVisor (runsc), for hosts without /dev/kvm. One job = one
+// sandboxed by gVisor (runsc) or by Docker's default seccomp profile
+// (per-pool `isolation`), for hosts without /dev/kvm. One job = one
 // container; the container exiting is the job-done signal (the docker
 // analogue of guest poweroff in the qemu backend).
 package dockerbackend

@@ -101,7 +101,8 @@ Host prerequisites:
 1. Docker Engine, with the `gh-runner` user in the `docker` group
    (docker-socket access is root-equivalent — this is the documented
    widening vs. the qemu backend's kvm-group-only posture).
-2. gVisor (`runsc`) from [gvisor.dev](https://gvisor.dev/docs/user_guide/install/),
+2. **gvisor-isolation pools only:** gVisor (`runsc`) from
+   [gvisor.dev](https://gvisor.dev/docs/user_guide/install/),
    registered in `/etc/docker/daemon.json`:
 
    ```json
@@ -130,8 +131,8 @@ Host prerequisites:
    `setup` runs an outbound-connectivity check from inside a container to
    catch exactly this.
 
-Then: `setup` → `refresh-image` (builds the `ghq-runner-base:latest` image
-natively, so the arch always matches the host) → `systemctl enable --now
+Then: `setup` → `refresh-image` (builds the image variants the configured
+pools need natively, so the arch always matches the host) → `systemctl enable --now
 github-qemu-runner`. Label docker pools with the real architecture (e.g.
 `arm64`), and as with the qemu backend: never attach runners to public
 repositories.

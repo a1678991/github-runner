@@ -43,8 +43,9 @@ func (o *BakeOptions) defaults() {
 	}
 }
 
-// Bake builds the runner container image from the embedded Dockerfile and
-// tags it Image. The build runs natively on this host, so the image arch
+// Bake builds the runner container image variants selected by o.Variants
+// from the embedded Dockerfile, tagging Image (dind) and/or SlimImage
+// (slim). The build runs natively on this host, so the image arch
 // always matches (arm64 hosts get linux-arm64 runners). A provenance
 // sidecar lands at <state>/images/docker-base.json, mirroring base.json.
 func Bake(ctx context.Context, o BakeOptions) error {
