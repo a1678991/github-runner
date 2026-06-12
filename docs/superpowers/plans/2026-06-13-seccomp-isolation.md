@@ -377,7 +377,7 @@ Expected: compile error — `DockerEntrypointSlim` undefined.
 #!/usr/bin/env bash
 # PID 1 of the ephemeral job container for isolation: seccomp pools (run
 # with --runtime=runc, NO --privileged — Docker's default seccomp profile
-# applies). No inner dockerd: jobs that need Docker belong on a gvisor
+# applies). No inner Docker Engine: jobs that need Docker belong on a gvisor
 # pool. Runs exactly one GitHub Actions job as the unprivileged "runner"
 # user; the container exits when the job finishes — host-side teardown
 # depends on that exit.
