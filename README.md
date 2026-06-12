@@ -8,6 +8,22 @@ fallback for hosts without `/dev/kvm` (see below). Linux sibling of
 
 Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
 
+## Features
+
+- One disposable VM (or gVisor-sandboxed container) per job; the runner is
+  pre-registered ephemeral via GitHub App JIT config — no PATs, no
+  registration tokens, nothing long-lived inside the guest
+- Static pools with per-pool sizing (`count`, `cpus`, `memory_mb`,
+  `disk_gb`), labels, and `org` or `repo` registration scope
+- Optional [runner groups](#runner-groups) on org-scoped pools
+- Optional [Docker backend](#docker-backend-hosts-without-devkvm) for hosts
+  without KVM and for arm64
+- GitHub Enterprise Server support via `github.api_base_url`
+- Graceful drain on stop (busy runners get `drain_timeout` to finish);
+  automatic crash recovery with orphan VM/record reaping on startup
+- systemd-native: hardened unit, optional `LoadCredential` key handling;
+  packages for Arch, Debian/Ubuntu, and NixOS
+
 ## How it works
 
 A Go daemon (`controller`) supervises static pools of runner slots. Per
@@ -91,6 +107,117 @@ repositories.
   **Administration: Read & write** (repo), installed on the target org/repos
 
 The docker backend has different host prerequisites — see "Docker backend" above.
+
+## Configuration
+
+The controller reads `/etc/github-qemu-runner/config.yaml` (override with
+`-config PATH`). Unknown keys are rejected at startup, so typos fail loudly
+instead of being ignored. `packaging/config.example.yaml` is a commented
+starting point.
+
+A standard configuration is the `github` block plus one or more pools:
+
+```yaml
+github:
+  app_id: 123456
+  installation_id: 7890123
+  private_key_path: /etc/github-qemu-runner/app-key.pem
+
+pools:
+  - name: build
+    scope: org
+    org: my-org
+    count: 2
+    cpus: 8
+    memory_mb: 16384
+    disk_gb: 60
+    labels: [self-hosted, linux, x64, build]
+```
+
+### `github` (required)
+
+| Key | Required | Default | Notes |
+|---|---|---|---|
+| `app_id` | yes | | GitHub App ID |
+| `installation_id` | yes | | Installation of that App on the target org/account |
+| `private_key_path` | yes | | App private key (PEM). Environment variables are expanded, so `${CREDENTIALS_DIRECTORY}/app-key.pem` works with systemd `LoadCredential` |
+| `api_base_url` | no | `https://api.github.com` | Set to `https://HOST/api/v3` for GitHub Enterprise Server |
+
+### Top level
+
+| Key | Required | Default | Notes |
+|---|---|---|---|
+| `state_dir` | no | `/var/lib/github-qemu-runner` | Images, per-VM workdirs, runtime state |
+| `docker.runtime` | no | `runsc` | Runtime for docker-backend job containers: `runsc` (gVisor) or `runc` (no sandbox — read the Docker backend section first) |
+
+### Pools
+
+Each pool is a fixed set of `count` slots; every slot runs one VM/container
+at a time, forever. Labels may overlap across pools.
+
+| Key | Required | Default | Notes |
+|---|---|---|---|
+| `name` | yes | | Lowercase alphanumeric + hyphens, max 20 chars; feeds runner/VM names (`ghq-<pool>-<id>`) |
+| `backend` | no | `qemu` | `qemu` or `docker` |
+| `scope` | yes | | `org` or `repo` |
+| `org` | with `scope: org` | | Organization login |
+| `repo` | with `scope: repo` | | `owner/name` |
+| `count` | yes | | Concurrent slots, ≥ 1 |
+| `cpus` | yes | | vCPUs per VM, ≥ 1 |
+| `memory_mb` | yes | | RAM per VM, ≥ 256 |
+| `disk_gb` | yes | | Disk per VM, ≥ 10; advisory (not enforced) on docker pools |
+| `labels` | yes | | At least one; runners are targeted by `runs-on` matching all labels |
+| `runner_group` | no | `Default` | Org-scoped pools only — see below |
+| `liveness_timeout` | no | `5m` | How long a freshly booted runner may take to show up online before the slot is torn down and recycled |
+| `drain_timeout` | no | `30m` | On shutdown, how long a busy runner may finish its job before being powered down (the job then fails — GitHub does not requeue jobs from vanished ephemeral runners). systemd `TimeoutStopSec` (35m in the shipped unit) must exceed the largest pool value |
+
+Oversubscription (`sum(count × cpus/memory)` beyond the host) is allowed
+but warned about by `setup` and at controller startup.
+
+### Runner groups
+
+Org-scoped pools can register their runners into a named
+[runner group](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/managing-access-to-self-hosted-runners-using-groups)
+to control which repositories (and which workflows) may use them:
+
+```yaml
+pools:
+  - name: private
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 4
+    memory_mb: 8192
+    disk_gb: 40
+    labels: [self-hosted, linux, x64, private]
+    runner_group: private-builders   # optional; defaults to "Default"
+```
+
+- The group must already exist (org **Settings → Actions → Runner
+  groups**); the controller resolves the name to its ID at each runner
+  registration and the slot fails with `runner group "..." not found` if it
+  does not. Creating groups beyond `Default` requires a GitHub Team or
+  Enterprise plan.
+- Repository visibility and "allow public repositories" are properties of
+  the group, managed on GitHub — the controller only places runners into
+  it.
+- `repo`-scoped pools cannot set this: the API has no repo-level runner
+  groups (repo runners always belong to the default group), and config
+  validation rejects anything but `Default` there.
+- No extra App permission is needed; org **Self-hosted runners: Read &
+  write** covers listing groups.
+
+## Commands
+
+```
+github-qemu-runner [-config PATH] <controller|refresh-image|setup>
+```
+
+| Command | What it does |
+|---|---|
+| `setup` | Preflight: config parses, binaries on PATH, `/dev/kvm` (or docker + runsc) usable, App key parses and authenticates, base image present, capacity warnings. All lines `ok` → ready |
+| `refresh-image` | Bakes (or re-bakes) the base images for whichever backends the pools use. Run after install and then periodically |
+| `controller` | Runs the pools (the systemd service; also the default when no command is given) |
 
 ## Install (manual)
 
@@ -198,13 +325,20 @@ The module wires the key via systemd `LoadCredential`; for manual
 `setup`/`refresh-image` runs use
 `systemd-run -P --wait -p LoadCredential=app-key.pem:/run/secrets/app-key.pem github-qemu-runner ... setup`.
 
-Use it from a workflow:
+## Use from a workflow
+
+Target a pool by listing its labels in `runs-on` (a job matches a runner
+only if the runner has *all* the requested labels):
 
 ```yaml
 jobs:
   build:
     runs-on: [self-hosted, linux, x64, build]
 ```
+
+For pools in a non-default runner group, nothing changes in the workflow —
+the group only controls which repositories are allowed to reach those
+runners.
 
 ## Runbook
 
@@ -227,7 +361,9 @@ jobs:
   they exist on disk only inside a per-VM seed ISO (0600) that is deleted
   on teardown.
 - Do not attach these runners to public repositories (fork-PR risk — see
-  GitHub's self-hosted runner hardening guide).
+  GitHub's self-hosted runner hardening guide). On org pools, a
+  non-default runner group with restricted repository visibility limits
+  who can reach the runners at all.
 - Hardening option: pass the App key via systemd `LoadCredential` (see the
   commented lines in the unit file). Note this applies only to the
   controller service: `setup` and `refresh-image` run outside systemd where

@@ -25,6 +25,9 @@ pools:
     memory_mb: 2048
     disk_gb: 20
     labels: [self-hosted, linux, x64, fmt]
+    # Org-scope pools can join a named runner group to control which repos
+    # may use the runners. The group must already exist (org Settings ->
+    # Actions -> Runner groups). Repo-scope pools must keep "Default".
     # runner_group: Default
     # liveness_timeout: 5m
     # drain_timeout: 30m
