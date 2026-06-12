@@ -83,6 +83,42 @@ func TestProvisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunArgsSeccomp(t *testing.T) {
+	p := config.Pool{CPUs: 4, MemoryMB: 4096, Isolation: "seccomp"}
+	got := RunArgs("ghq-fast-ab12", "runsc", p, "/var/lib/x/run/ghq-fast-ab12/jit")
+	want := []string{
+		"run", "--detach",
+		"--name", "ghq-fast-ab12",
+		"--runtime", "runc",
+		"--cap-drop", "NET_RAW", "--cap-drop", "MKNOD",
+		"--cpus", "4",
+		"--memory", "4096m",
+		"--label", "ghq.managed=true",
+		"--volume", "/var/lib/x/run/ghq-fast-ab12/jit:/jit:ro",
+		"ghq-runner-slim:latest",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RunArgs(seccomp):\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestRunArgsSeccompCustomProfile(t *testing.T) {
+	p := config.Pool{
+		CPUs: 1, MemoryMB: 512, Isolation: "seccomp",
+		SeccompProfile: "/etc/ghq/strict.json",
+	}
+	got := strings.Join(RunArgs("ghq-x-y", "runsc", p, "/run/jit"), " ")
+	if !strings.Contains(got, "--security-opt seccomp=/etc/ghq/strict.json") {
+		t.Errorf("custom profile missing from argv: %s", got)
+	}
+	if strings.Contains(got, "--privileged") {
+		t.Errorf("seccomp isolation must never be privileged: %s", got)
+	}
+	if strings.Contains(got, "runsc") {
+		t.Errorf("seccomp isolation must ignore docker.runtime: %s", got)
+	}
+}
+
 func TestProvisionFailureCleansUp(t *testing.T) {
 	dir := t.TempDir()
 	failingDocker := filepath.Join(dir, "docker")
