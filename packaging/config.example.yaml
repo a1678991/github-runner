@@ -41,7 +41,7 @@ pools:
     labels: [self-hosted, linux, x64, build]
   #- name: oci-arm
   #  backend: docker     # qemu (default) | docker
-  #  isolation: gvisor   # gvisor (default; DinD via runsc) | seccomp
+  #  isolation: gvisor   # gvisor (default; Docker-in-Docker via runsc) | seccomp
   #                      # (native runc + Docker's default seccomp profile;
   #                      # faster, but NO docker inside jobs — see README)
   #  # seccomp_profile: /etc/ghq/strict.json  # optional custom profile

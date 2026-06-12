@@ -2,8 +2,9 @@
 
 Ephemeral GitHub Actions self-hosted runners on Linux. Every job runs in a
 disposable QEMU/KVM virtual machine that is destroyed afterwards — the VM is
-the isolation boundary. A gVisor-sandboxed Docker backend is available as a
-fallback for hosts without `/dev/kvm` (see below). Linux sibling of
+the isolation boundary. A sandboxed Docker backend (gVisor by default, or a
+faster seccomp mode) is available as a fallback for hosts without `/dev/kvm`
+(see below). Linux sibling of
 [github-tart-runner](https://github.com/a1678991/github-tart-runner) (macOS).
 
 Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
@@ -18,7 +19,7 @@ Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
 - Optional [runner groups](#runner-groups) on org-scoped pools
 - Optional [Docker backend](#docker-backend-hosts-without-devkvm) for hosts
   without KVM and for arm64, with per-pool `isolation: gvisor | seccomp`
-  (seccomp = native-runc speed for jobs that don't need Docker inside)
+  (seccomp = no sandbox overhead, for jobs that don't need Docker inside)
 - GitHub Enterprise Server support via `github.api_base_url`
 - Graceful drain on stop (busy runners get `drain_timeout` to finish);
   automatic crash recovery with orphan VM/record reaping on startup
@@ -76,7 +77,7 @@ pools:
 The job container then runs under native `runc` **without** `--privileged`,
 so Docker's default seccomp profile and capability bounding apply (plus
 `NET_RAW`/`MKNOD` dropped — `ping` won't work inside jobs). This removes
-gVisor's syscall-interception overhead entirely; gVisor is not even required
+gVisor's syscall-interception overhead entirely; gVisor is not required
 on the host if every docker pool uses seccomp isolation.
 
 Trade-offs, explicitly:
@@ -85,8 +86,8 @@ Trade-offs, explicitly:
   container boundary (namespaces + cgroups + seccomp allowlist + capability
   bounding). A kernel 0-day reachable through allowlisted syscalls escapes.
   Isolation ladder: qemu > gvisor > seccomp > `docker.runtime: runc`
-  (privileged + unconfined — note seccomp mode is strictly *stronger* than
-  that escape hatch).
+  (privileged + unconfined). Note that seccomp mode is strictly stronger
+  than the `runtime: runc` escape hatch.
 - **No Docker inside jobs:** `container:` jobs, service containers, and
   `docker build` fail (the slim image `ghq-runner-slim:latest` ships no
   Docker Engine). Keep such jobs on a gvisor pool — one host can run both.
@@ -196,6 +197,8 @@ at a time, forever. Labels may overlap across pools.
 |---|---|---|---|
 | `name` | yes | | Lowercase alphanumeric + hyphens, max 20 chars; feeds runner/VM names (`ghq-<pool>-<id>`) |
 | `backend` | no | `qemu` | `qemu` or `docker` |
+| `isolation` | no | `gvisor` | Docker pools only: `gvisor` (default) or `seccomp` |
+| `seccomp_profile` | no | | Seccomp pools only: optional absolute path to a custom seccomp profile |
 | `scope` | yes | | `org` or `repo` |
 | `org` | with `scope: org` | | Organization login |
 | `repo` | with `scope: repo` | | `owner/name` |
