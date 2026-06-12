@@ -284,3 +284,101 @@ func TestInvalidDockerRuntimeRejected(t *testing.T) {
 		t.Errorf("want runtime validation error, got %v", err)
 	}
 }
+
+const seccompPoolYAML = dockerPoolYAML + `  - name: fast
+    backend: docker
+    isolation: seccomp
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 4
+    memory_mb: 4096
+    disk_gb: 20
+    labels: [self-hosted, linux, fast]
+`
+
+func TestIsolationDefaultsToGvisor(t *testing.T) {
+	c, err := Load(writeConfig(t, dockerPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Pools[0].Isolation; got != "gvisor" {
+		t.Errorf("default isolation = %q, want gvisor", got)
+	}
+	if !c.HasDockerIsolation("gvisor") || c.HasDockerIsolation("seccomp") {
+		t.Error("HasDockerIsolation wrong for gvisor-only config")
+	}
+}
+
+func TestQEMUPoolHasNoIsolation(t *testing.T) {
+	c, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Pools[0].Isolation; got != "" {
+		t.Errorf("qemu pool isolation = %q, want empty", got)
+	}
+	if c.HasDockerIsolation("gvisor") || c.HasDockerIsolation("seccomp") {
+		t.Error("HasDockerIsolation must be false for qemu-only config")
+	}
+}
+
+func TestSeccompIsolationAccepted(t *testing.T) {
+	c, err := Load(writeConfig(t, seccompPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Pools[1].Isolation; got != "seccomp" {
+		t.Errorf("isolation = %q, want seccomp", got)
+	}
+	if !c.HasDockerIsolation("gvisor") || !c.HasDockerIsolation("seccomp") {
+		t.Error("HasDockerIsolation must report both modes for mixed config")
+	}
+}
+
+func TestSeccompProfileAccepted(t *testing.T) {
+	y := strings.Replace(seccompPoolYAML, "    isolation: seccomp\n",
+		"    isolation: seccomp\n    seccomp_profile: /etc/ghq/strict.json\n", 1)
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Pools[1].SeccompProfile; got != "/etc/ghq/strict.json" {
+		t.Errorf("seccomp_profile = %q", got)
+	}
+}
+
+func TestIsolationValidationErrors(t *testing.T) {
+	cases := []struct{ name, yaml, wantErr string }{
+		{
+			"bad isolation value",
+			strings.Replace(seccompPoolYAML, "isolation: seccomp", "isolation: firecracker", 1),
+			`isolation must be "gvisor" or "seccomp"`,
+		},
+		{
+			"isolation on qemu pool",
+			validYAML + "    isolation: seccomp\n",
+			"only valid on docker pools",
+		},
+		{
+			"seccomp_profile without seccomp isolation",
+			strings.Replace(dockerPoolYAML, "    backend: docker\n",
+				"    backend: docker\n    seccomp_profile: /etc/ghq/p.json\n", 1),
+			"requires isolation: seccomp",
+		},
+		{
+			"relative seccomp_profile",
+			strings.Replace(seccompPoolYAML, "    isolation: seccomp\n",
+				"    isolation: seccomp\n    seccomp_profile: rel/p.json\n", 1),
+			"absolute path",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
