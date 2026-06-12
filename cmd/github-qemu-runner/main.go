@@ -87,10 +87,18 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 		if err != nil {
 			return err
 		}
+		var variants []string
+		if cfg.HasDockerIsolation("gvisor") {
+			variants = append(variants, "dind")
+		}
+		if cfg.HasDockerIsolation("seccomp") {
+			variants = append(variants, "slim")
+		}
 		if err := dockerbackend.Bake(ctx, dockerbackend.BakeOptions{
 			StateDir:  cfg.StateDir,
 			APIBase:   cfg.GitHub.APIBaseURL,
 			DockerBin: dockerBin,
+			Variants:  variants,
 			Log:       log,
 		}); err != nil {
 			return err
