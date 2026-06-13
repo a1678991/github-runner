@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/a1678991/github-qemu-runner/compare/v0.2.0...v0.3.0) (2026-06-13)
+
+
+### Features
+
+* **bake:** build dind/slim image variants per configured isolation ([d95b436](https://github.com/a1678991/github-qemu-runner/commit/d95b436d0e887951cec9d4b1e4efd73af74d4529))
+* **config:** per-pool isolation and seccomp_profile for docker pools ([6cda8c4](https://github.com/a1678991/github-qemu-runner/commit/6cda8c4f4e1ab9515df8173e555f78d9f69280a3))
+* **controller:** isolation-aware image and seccomp-profile preflights ([1bc8a4f](https://github.com/a1678991/github-qemu-runner/commit/1bc8a4f8b3e2ad1cc771008addc329ccffb73c34))
+* **dockerbackend:** seccomp-isolation run args and slim image tag ([dd30006](https://github.com/a1678991/github-qemu-runner/commit/dd3000684ae19b89581c1808bd341f9d2bd00e72))
+* **images:** multi-stage Dockerfile with docker-engine-free slim variant ([87ae63d](https://github.com/a1678991/github-qemu-runner/commit/87ae63ddd1d3390fb18c5d3b6a4bdf3474ce21f6))
+* seccomp isolation mode for docker pools ([6d58467](https://github.com/a1678991/github-qemu-runner/commit/6d58467912951e587cd7071594c786f9357bd9fa))
+* **setup:** gate runsc check on gvisor pools; per-isolation connectivity checks ([857f9b5](https://github.com/a1678991/github-qemu-runner/commit/857f9b5b8e6076fd420b2a157808eae6d540070d))
+
+
+### Bug Fixes
+
+* **images:** grant runner passwordless sudo in both backends ([eb5196b](https://github.com/a1678991/github-qemu-runner/commit/eb5196b4f21ccc6cda8f4841e45ae5a1918a59ae))
+* **images:** grant runner passwordless sudo in both backends ([86df3b3](https://github.com/a1678991/github-qemu-runner/commit/86df3b36bb56e56869e15419543faf04a48a49a5))
+
 ## [0.2.0](https://github.com/a1678991/github-qemu-runner/compare/v0.1.0...v0.2.0) (2026-06-11)
 
 

@@ -1,6 +1,6 @@
 # Maintainer: a1678991 <a1678991@iroserver.net>
 pkgname=github-qemu-runner
-pkgver=0.2.0 # x-release-please-version
+pkgver=0.3.0 # x-release-please-version
 pkgrel=1
 pkgdesc='Ephemeral GitHub Actions self-hosted runners in disposable QEMU/KVM VMs'
 arch=('x86_64')
