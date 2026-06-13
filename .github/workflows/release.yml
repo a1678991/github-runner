@@ -46,11 +46,11 @@ jobs:
           test "v$ver" = "$TAG" \
             || { echo "::error::PKGBUILD pkgver v$ver does not match released tag $TAG"; exit 1; }
           cp -r packaging/arch/release /home/builder/build
-          # The repo is private, so the PKGBUILD's public archive URL 404s
-          # for the anonymous curl that makepkg/updpkgsums use. Provide the
-          # source tarball from this authenticated checkout of the tag
-          # instead; makepkg uses a pre-existing source file as-is
-          # (sha256sums stays SKIP).
+          # Provide the source tarball from this checkout of the tag so
+          # makepkg builds from exactly what was just released, not from
+          # whatever the public archive URL serves at fetch time (which
+          # also race-404s right after a tag push). makepkg uses a
+          # pre-existing source file as-is; sha256sums stays SKIP.
           git archive --format=tar.gz --prefix="github-qemu-runner-$ver/" \
             -o "/home/builder/build/github-qemu-runner-$ver.tar.gz" HEAD
           chown -R builder:builder /home/builder/build
