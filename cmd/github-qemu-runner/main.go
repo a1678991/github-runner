@@ -1,5 +1,6 @@
 // Command github-qemu-runner runs ephemeral GitHub Actions runners in
-// QEMU/KVM virtual machines or gVisor-sandboxed Docker containers:
+// QEMU/KVM virtual machines or sandboxed Docker containers (per-pool
+// gvisor or seccomp isolation):
 // `controller` supervises runner pools, `refresh-image` (re)bakes the
 // base VM image and/or runner container image, `setup` runs preflight
 // checks. See packaging/config.example.yaml for configuration.
@@ -87,10 +88,18 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 		if err != nil {
 			return err
 		}
+		var variants []string
+		if cfg.HasDockerIsolation("gvisor") {
+			variants = append(variants, "dind")
+		}
+		if cfg.HasDockerIsolation("seccomp") {
+			variants = append(variants, "slim")
+		}
 		if err := dockerbackend.Bake(ctx, dockerbackend.BakeOptions{
 			StateDir:  cfg.StateDir,
 			APIBase:   cfg.GitHub.APIBaseURL,
 			DockerBin: dockerBin,
+			Variants:  variants,
 			Log:       log,
 		}); err != nil {
 			return err
@@ -133,24 +142,38 @@ func runSetup(ctx context.Context, configPath string) error {
 		check("docker on PATH", lookErr)
 		if lookErr == nil {
 			check("docker daemon reachable", exec.CommandContext(ctx, dockerBin, "info").Run())
-			if cfg.Docker.Runtime == "runsc" {
-				out, err := exec.CommandContext(ctx, dockerBin, "info", "--format", "{{json .Runtimes}}").Output()
-				if err == nil && !strings.Contains(string(out), `"runsc"`) {
-					err = fmt.Errorf(`runsc not in docker runtimes — register it in /etc/docker/daemon.json with runtimeArgs ["--net-raw","--allow-packet-socket-write"], then restart docker`)
+			if cfg.HasDockerIsolation("gvisor") {
+				if cfg.Docker.Runtime == "runsc" {
+					out, err := exec.CommandContext(ctx, dockerBin, "info", "--format", "{{json .Runtimes}}").Output()
+					if err == nil && !strings.Contains(string(out), `"runsc"`) {
+						err = fmt.Errorf(`runsc not in docker runtimes — register it in /etc/docker/daemon.json with runtimeArgs ["--net-raw","--allow-packet-socket-write"], then restart docker`)
+					}
+					check("runsc runtime registered", err)
+				} else {
+					fmt.Printf("warn  docker.runtime is runc: gvisor-isolation pools run WITHOUT gVisor; --privileged DinD has effectively no isolation boundary\n")
 				}
-				check("runsc runtime registered", err)
-			} else {
-				fmt.Printf("warn  docker.runtime is runc: job containers run WITHOUT gVisor; --privileged DinD has effectively no isolation boundary\n")
 			}
-			if err := exec.CommandContext(ctx, dockerBin, "image", "inspect", dockerbackend.Image).Run(); err != nil {
-				fmt.Printf("note  runner image missing; run `github-qemu-runner refresh-image`\n")
-			} else {
-				fmt.Printf("ok    runner image %s\n", dockerbackend.Image)
-				// Catches host-firewall problems (e.g. OCI's default
-				// inet-filter forward DROP) that only bite inside containers.
-				check("container outbound connectivity", exec.CommandContext(ctx, dockerBin,
-					"run", "--rm", "--runtime", cfg.Docker.Runtime, "--entrypoint", "curl",
-					dockerbackend.Image, "-fsS", "--max-time", "30",
+			// One image + outbound-connectivity check per isolation mode in
+			// use, each with its matching runtime and image. Catches
+			// host-firewall problems (e.g. OCI's default inet-filter forward
+			// DROP) that only bite inside containers.
+			type modeCheck struct{ runtime, image string }
+			var modes []modeCheck
+			if cfg.HasDockerIsolation("gvisor") {
+				modes = append(modes, modeCheck{cfg.Docker.Runtime, dockerbackend.Image})
+			}
+			if cfg.HasDockerIsolation("seccomp") {
+				modes = append(modes, modeCheck{"runc", dockerbackend.SlimImage})
+			}
+			for _, m := range modes {
+				if err := exec.CommandContext(ctx, dockerBin, "image", "inspect", m.image).Run(); err != nil {
+					fmt.Printf("note  runner image %s missing; run `github-qemu-runner refresh-image`\n", m.image)
+					continue
+				}
+				fmt.Printf("ok    runner image %s\n", m.image)
+				check("container outbound connectivity ("+m.image+")", exec.CommandContext(ctx, dockerBin,
+					"run", "--rm", "--runtime", m.runtime, "--entrypoint", "curl",
+					m.image, "-fsS", "--max-time", "30",
 					"-o", "/dev/null", "https://api.github.com").Run())
 			}
 		}

@@ -15,3 +15,6 @@ var Dockerfile string
 
 //go:embed docker/entrypoint.sh
 var DockerEntrypoint string
+
+//go:embed docker/entrypoint-slim.sh
+var DockerEntrypointSlim string

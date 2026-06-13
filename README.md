@@ -2,8 +2,9 @@
 
 Ephemeral GitHub Actions self-hosted runners on Linux. Every job runs in a
 disposable QEMU/KVM virtual machine that is destroyed afterwards — the VM is
-the isolation boundary. A gVisor-sandboxed Docker backend is available as a
-fallback for hosts without `/dev/kvm` (see below). Linux sibling of
+the isolation boundary. A sandboxed Docker backend (gVisor by default, or a
+faster seccomp mode) is available as a fallback for hosts without `/dev/kvm`
+(see below). Linux sibling of
 [github-tart-runner](https://github.com/a1678991/github-tart-runner) (macOS).
 
 Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
@@ -17,7 +18,8 @@ Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
   `disk_gb`), labels, and `org` or `repo` registration scope
 - Optional [runner groups](#runner-groups) on org-scoped pools
 - Optional [Docker backend](#docker-backend-hosts-without-devkvm) for hosts
-  without KVM and for arm64
+  without KVM and for arm64, with per-pool `isolation: gvisor | seccomp`
+  (seccomp = no sandbox overhead, for jobs that don't need Docker inside)
 - GitHub Enterprise Server support via `github.api_base_url`
 - Graceful drain on stop (busy runners get `drain_timeout` to finish);
   automatic crash recovery with orphan VM/record reaping on startup
@@ -58,12 +60,49 @@ becomes root on the host — never do this on a machine you care about.
 `disk_gb` is advisory on docker pools (standard storage drivers cannot
 enforce per-container quotas); a runaway job can fill the host filesystem.
 
+### Seccomp isolation mode (higher performance, no Docker-in-job)
+
+Docker pools that don't need Docker inside the job (build / test / lint
+workloads) can opt into `isolation: seccomp` per pool:
+
+```yaml
+pools:
+  - name: fast
+    backend: docker
+    isolation: seccomp   # gvisor (default) | seccomp
+    # seccomp_profile: /etc/ghq/strict.json   # optional custom profile
+    ...
+```
+
+The job container then runs under native `runc` **without** `--privileged`,
+so Docker's default seccomp profile and capability bounding apply (plus
+`NET_RAW`/`MKNOD` dropped — `ping` won't work inside jobs). This removes
+gVisor's syscall-interception overhead entirely; gVisor is not required
+on the host if every docker pool uses seccomp isolation.
+
+Trade-offs, explicitly:
+
+- **Weaker than gVisor:** the job shares the host kernel behind the standard
+  container boundary (namespaces + cgroups + seccomp allowlist + capability
+  bounding). A kernel 0-day reachable through allowlisted syscalls escapes.
+  Isolation ladder: qemu > gvisor > seccomp > `docker.runtime: runc`
+  (privileged + unconfined). Note that seccomp mode is strictly stronger
+  than the `runtime: runc` escape hatch.
+- **No Docker inside jobs:** `container:` jobs, service containers, and
+  `docker build` fail (the slim image `ghq-runner-slim:latest` ships no
+  Docker Engine). Keep such jobs on a gvisor pool — one host can run both.
+- `sudo`/`apt-get` keep working (GitHub-hosted parity); `docker.runtime` is
+  ignored by seccomp pools.
+- `seccomp_profile` (absolute path) swaps in a custom profile instead of
+  Docker's built-in default; it can tighten the sandbox, never disable it.
+
 Host prerequisites:
 
 1. Docker Engine, with the `gh-runner` user in the `docker` group
    (docker-socket access is root-equivalent — this is the documented
    widening vs. the qemu backend's kvm-group-only posture).
-2. gVisor (`runsc`) from [gvisor.dev](https://gvisor.dev/docs/user_guide/install/),
+2. **gvisor-isolation pools only:** gVisor (`runsc`) from
+   [gvisor.dev](https://gvisor.dev/docs/user_guide/install/),
    registered in `/etc/docker/daemon.json`:
 
    ```json
@@ -92,8 +131,8 @@ Host prerequisites:
    `setup` runs an outbound-connectivity check from inside a container to
    catch exactly this.
 
-Then: `setup` → `refresh-image` (builds the `ghq-runner-base:latest` image
-natively, so the arch always matches the host) → `systemctl enable --now
+Then: `setup` → `refresh-image` (builds the image variants the configured
+pools need natively, so the arch always matches the host) → `systemctl enable --now
 github-qemu-runner`. Label docker pools with the real architecture (e.g.
 `arm64`), and as with the qemu backend: never attach runners to public
 repositories.
@@ -159,6 +198,8 @@ at a time, forever. Labels may overlap across pools.
 |---|---|---|---|
 | `name` | yes | | Lowercase alphanumeric + hyphens, max 20 chars; feeds runner/VM names (`ghq-<pool>-<id>`) |
 | `backend` | no | `qemu` | `qemu` or `docker` |
+| `isolation` | no | `gvisor` | Docker pools only: `gvisor` (default) or `seccomp` |
+| `seccomp_profile` | no | | Seccomp pools only: optional absolute path to a custom seccomp profile |
 | `scope` | yes | | `org` or `repo` |
 | `org` | with `scope: org` | | Organization login |
 | `repo` | with `scope: repo` | | `owner/name` |

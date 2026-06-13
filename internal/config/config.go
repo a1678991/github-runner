@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -49,8 +50,17 @@ type Docker struct {
 }
 
 type Pool struct {
-	Name            string   `yaml:"name"`
-	Backend         string   `yaml:"backend"`
+	Name    string `yaml:"name"`
+	Backend string `yaml:"backend"`
+	// Isolation selects the sandbox for docker pools: "gvisor" (default;
+	// runsc + --privileged, full Docker-in-job) or "seccomp" (native runc,
+	// no --privileged, Docker's default seccomp profile; no Docker inside
+	// the job). Only valid on backend: docker pools.
+	Isolation string `yaml:"isolation"`
+	// SeccompProfile optionally replaces Docker's built-in default seccomp
+	// profile with a custom one (absolute path on the host). Only valid
+	// with Isolation "seccomp"; empty means the built-in default.
+	SeccompProfile  string   `yaml:"seccomp_profile"`
 	Scope           string   `yaml:"scope"`
 	Org             string   `yaml:"org"`
 	Repo            string   `yaml:"repo"`
@@ -113,6 +123,9 @@ func (c *Config) applyDefaults() {
 		if p.Backend == "" {
 			p.Backend = "qemu"
 		}
+		if p.Backend == "docker" && p.Isolation == "" {
+			p.Isolation = "gvisor"
+		}
 		if p.RunnerGroup == "" {
 			p.RunnerGroup = "Default"
 		}
@@ -152,6 +165,21 @@ func (c *Config) validate() error {
 		seen[p.Name] = true
 		if p.Backend != "qemu" && p.Backend != "docker" {
 			return fmt.Errorf(`pool %s: backend must be "qemu" or "docker"`, p.Name)
+		}
+		if p.Backend == "docker" {
+			if p.Isolation != "gvisor" && p.Isolation != "seccomp" {
+				return fmt.Errorf(`pool %s: isolation must be "gvisor" or "seccomp"`, p.Name)
+			}
+		} else if p.Isolation != "" {
+			return fmt.Errorf("pool %s: isolation is only valid on docker pools", p.Name)
+		}
+		if p.SeccompProfile != "" {
+			if p.Isolation != "seccomp" {
+				return fmt.Errorf("pool %s: seccomp_profile requires isolation: seccomp", p.Name)
+			}
+			if !filepath.IsAbs(p.SeccompProfile) {
+				return fmt.Errorf("pool %s: seccomp_profile must be an absolute path", p.Name)
+			}
 		}
 		switch p.Scope {
 		case "org":
@@ -216,6 +244,17 @@ func (c *Config) CapacityWarnings(hostCPUs, hostMemMB int) []string {
 func (c *Config) HasBackend(b string) bool {
 	for _, p := range c.Pools {
 		if p.Backend == b {
+			return true
+		}
+	}
+	return false
+}
+
+// HasDockerIsolation reports whether any docker pool uses the given
+// isolation mode ("gvisor" or "seccomp").
+func (c *Config) HasDockerIsolation(mode string) bool {
+	for _, p := range c.Pools {
+		if p.Backend == "docker" && p.Isolation == mode {
 			return true
 		}
 	}

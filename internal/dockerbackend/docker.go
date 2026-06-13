@@ -1,5 +1,6 @@
 // Package dockerbackend runs ephemeral runner jobs in Docker containers
-// sandboxed by gVisor (runsc), for hosts without /dev/kvm. One job = one
+// sandboxed by gVisor (runsc) or by Docker's default seccomp profile
+// (per-pool `isolation`), for hosts without /dev/kvm. One job = one
 // container; the container exiting is the job-done signal (the docker
 // analogue of guest poweroff in the qemu backend).
 package dockerbackend
@@ -19,6 +20,10 @@ import (
 // Image is the locally-built runner image tag (see Bake).
 const Image = "ghq-runner-base:latest"
 
+// SlimImage is the Docker-Engine-free runner image for isolation: seccomp
+// pools (see Bake).
+const SlimImage = "ghq-runner-slim:latest"
+
 // managedLabel marks containers owned by this controller for reaping.
 const managedLabel = "ghq.managed=true"
 
@@ -31,23 +36,39 @@ func RunnerArch(goarch string) string {
 	return "x64"
 }
 
-// RunArgs builds the `docker run` argv for one job container.
-// --privileged is required by the inner dockerd (DinD); under runtime
-// runsc it grants capabilities inside gVisor's sandbox, not on the host.
+// RunArgs builds the `docker run` argv for one job container, branching on
+// the pool's isolation mode.
+//
+// gvisor: --privileged is required by the inner dockerd (DinD); under
+// runtime runsc it grants capabilities inside gVisor's sandbox, not on the
+// host.
+//
+// seccomp: native runc WITHOUT --privileged, so Docker's default seccomp
+// profile and capability bounding apply (NET_RAW and MKNOD dropped on
+// top); docker.runtime is ignored — pinning runc is the performance point.
+//
 // jitDir must be an absolute path without ':' (the bind-mount spec is
 // colon-delimited).
 func RunArgs(name, runtime string, p config.Pool, jitDir string) []string {
-	return []string{
-		"run", "--detach",
-		"--name", name,
-		"--runtime", runtime,
-		"--privileged",
-		"--cpus", strconv.Itoa(p.CPUs),
-		"--memory", strconv.Itoa(p.MemoryMB) + "m",
-		"--label", managedLabel,
-		"--volume", jitDir + ":/jit:ro",
-		Image,
+	args := []string{"run", "--detach", "--name", name}
+	image := Image
+	if p.Isolation == "seccomp" {
+		image = SlimImage
+		args = append(args, "--runtime", "runc",
+			"--cap-drop", "NET_RAW", "--cap-drop", "MKNOD")
+		if p.SeccompProfile != "" {
+			args = append(args, "--security-opt", "seccomp="+p.SeccompProfile)
+		}
+	} else {
+		args = append(args, "--runtime", runtime, "--privileged")
 	}
+	return append(args,
+		"--cpus", strconv.Itoa(p.CPUs),
+		"--memory", strconv.Itoa(p.MemoryMB)+"m",
+		"--label", managedLabel,
+		"--volume", jitDir+":/jit:ro",
+		image,
+	)
 }
 
 // Provisioner creates one Docker container per job. It implements

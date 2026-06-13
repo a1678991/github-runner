@@ -36,4 +36,18 @@ func TestDockerAssetsEmbedded(t *testing.T) {
 	if !strings.Contains(DockerEntrypoint, "runuser -u runner") {
 		t.Error("entrypoint must drop privileges via runuser -u runner before exec'ing run.sh (PID 1 is root for dockerd; the job must not be)")
 	}
+	if !strings.Contains(Dockerfile, "FROM ubuntu:24.04 AS base") ||
+		!strings.Contains(Dockerfile, "FROM base AS dind") ||
+		!strings.Contains(Dockerfile, "FROM base AS slim") {
+		t.Error("Dockerfile must define dind and slim build stages sharing a common base stage")
+	}
+	if !strings.Contains(DockerEntrypointSlim, "runuser -u runner") {
+		t.Error("slim entrypoint must drop privileges via runuser -u runner before exec'ing run.sh")
+	}
+	if !strings.Contains(DockerEntrypointSlim, "--jitconfig") {
+		t.Error("slim entrypoint must pass the JIT config to run.sh")
+	}
+	if strings.Contains(DockerEntrypointSlim, "dockerd") {
+		t.Error("slim entrypoint must not start dockerd (seccomp pools run without --privileged; DinD is gvisor-pool-only)")
+	}
 }
