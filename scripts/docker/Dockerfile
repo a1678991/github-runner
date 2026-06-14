@@ -13,7 +13,8 @@ LABEL org.opencontainers.image.title="ghq-runner-base" \
       org.opencontainers.image.version="${RUNNER_VERSION}"
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl git sudo && \
+        ca-certificates curl git sudo unzip && \
+    echo 'APT::Get::Assume-Yes "true";' > /etc/apt/apt.conf.d/90assume-yes && \
     rm -rf /var/lib/apt/lists/*
 
 # uid 1001: ubuntu:24.04 ships an "ubuntu" user at 1000. Passwordless sudo

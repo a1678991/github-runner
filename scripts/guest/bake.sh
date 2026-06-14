@@ -20,7 +20,8 @@ chmod 0440 /etc/sudoers.d/runner
 
 apt-get update
 apt-get install -y --no-install-recommends \
-  git curl ca-certificates jq build-essential sudo docker.io
+  git curl ca-certificates jq build-essential sudo docker.io unzip
+echo 'APT::Get::Assume-Yes "true"' >/etc/apt/apt.conf.d/90assume-yes
 usermod -aG docker runner
 systemctl enable docker
 
