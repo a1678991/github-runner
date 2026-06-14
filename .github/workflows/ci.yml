@@ -56,12 +56,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve latest runner release
-        id: runner
+      - name: Fetch runner release metadata
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh api repos/actions/runner/releases/latest > /tmp/runner-release.json
+
+      - name: Parse runner release
+        id: runner
         run: |
-          rel=$(gh api repos/actions/runner/releases/latest)
+          rel=$(cat /tmp/runner-release.json)
           version=$(echo "$rel" | jq -r .tag_name | cut -c2-)
           arch="x64"
           asset="actions-runner-linux-${arch}-${version}.tar.gz"
