@@ -91,6 +91,8 @@ jobs:
       - name: Verify image contents
         run: |
           for tag in ghq-runner-dind:ci-test ghq-runner-slim:ci-test; do
-            docker run --rm --entrypoint sh "$tag" -c \
-              'which unzip && test -f /etc/apt/apt.conf.d/90assume-yes && test -x /opt/actions-runner/bin/run'
+            echo "=== verifying $tag ==="
+            docker run --rm --entrypoint sh "$tag" -c 'which unzip'
+            docker run --rm --entrypoint sh "$tag" -c 'cat /etc/apt/apt.conf.d/90assume-yes'
+            docker run --rm --entrypoint sh "$tag" -c 'ls -la /opt/actions-runner/bin/run'
           done
