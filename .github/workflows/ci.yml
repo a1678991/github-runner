@@ -73,13 +73,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build runner images (dind + slim)
+        env:
+          RUNNER_VERSION: ${{ steps.runner.outputs.version }}
+          RUNNER_TARBALL_URL: ${{ steps.runner.outputs.url }}
+          RUNNER_TARBALL_SHA256: ${{ steps.runner.outputs.sha }}
         run: |
           for target in dind slim; do
             docker build \
               --pull --target "$target" \
-              --build-arg RUNNER_VERSION="${{ steps.runner.outputs.version }}" \
-              --build-arg RUNNER_TARBALL_URL="${{ steps.runner.outputs.url }}" \
-              --build-arg RUNNER_TARBALL_SHA256="${{ steps.runner.outputs.sha }}" \
+              --build-arg "RUNNER_VERSION=${RUNNER_VERSION}" \
+              --build-arg "RUNNER_TARBALL_URL=${RUNNER_TARBALL_URL}" \
+              --build-arg "RUNNER_TARBALL_SHA256=${RUNNER_TARBALL_SHA256}" \
               --tag "ghq-runner-${target}:ci-test" \
               scripts/docker/
           done
@@ -87,7 +91,6 @@ jobs:
       - name: Verify image contents
         run: |
           for tag in ghq-runner-dind:ci-test ghq-runner-slim:ci-test; do
-            docker run --rm "$tag" which unzip
-            docker run --rm "$tag" test -f /etc/apt/apt.conf.d/90assume-yes
-            docker run --rm "$tag" test -x /opt/actions-runner/bin/run
+            docker run --rm --entrypoint sh "$tag" -c \
+              'which unzip && test -f /etc/apt/apt.conf.d/90assume-yes && test -x /opt/actions-runner/bin/run'
           done
