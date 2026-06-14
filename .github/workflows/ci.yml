@@ -58,6 +58,8 @@ jobs:
 
       - name: Resolve latest runner release
         id: runner
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           rel=$(gh api repos/actions/runner/releases/latest)
           version=$(echo "$rel" | jq -r .tag_name | cut -c2-)
