@@ -31,8 +31,22 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 type Config struct {
 	GitHub   GitHub `yaml:"github"`
 	StateDir string `yaml:"state_dir"`
+	Paths    Paths  `yaml:"paths"`
 	Docker   Docker `yaml:"docker"`
 	Pools    []Pool `yaml:"pools"`
+}
+
+// Paths overrides the default per-concern subdirectories under StateDir.
+// Both fields default to <StateDir>/{images,run} when empty.
+type Paths struct {
+	// Images holds the baked base image (base.qcow2 + base.json), the
+	// cloud image download, the bake working directory, and the docker
+	// runner image provenance sidecar.
+	Images string `yaml:"images"`
+	// Run holds per-VM workdirs (overlay.qcow2, seed ISO, console log,
+	// QMP socket, PID file) for QEMU pools, and the jit-config mount
+	// staging directory for docker pools.
+	Run string `yaml:"run"`
 }
 
 type GitHub struct {
@@ -112,6 +126,14 @@ func (c *Config) applyDefaults() {
 	if c.StateDir == "" {
 		c.StateDir = "/var/lib/github-qemu-runner"
 	}
+	c.Paths.Images = os.ExpandEnv(c.Paths.Images)
+	c.Paths.Run = os.ExpandEnv(c.Paths.Run)
+	if c.Paths.Images == "" {
+		c.Paths.Images = filepath.Join(c.StateDir, "images")
+	}
+	if c.Paths.Run == "" {
+		c.Paths.Run = filepath.Join(c.StateDir, "run")
+	}
 	// Lets the systemd unit pass the App key via LoadCredential:
 	// private_key_path: ${CREDENTIALS_DIRECTORY}/app-key.pem
 	c.GitHub.PrivateKeyPath = os.ExpandEnv(c.GitHub.PrivateKeyPath)
@@ -153,6 +175,12 @@ func (c *Config) validate() error {
 	}
 	if c.Docker.Runtime != "runsc" && c.Docker.Runtime != "runc" {
 		return fmt.Errorf(`docker.runtime must be "runsc" or "runc"`)
+	}
+	if !filepath.IsAbs(c.Paths.Images) {
+		return fmt.Errorf("paths.images must be an absolute path")
+	}
+	if !filepath.IsAbs(c.Paths.Run) {
+		return fmt.Errorf("paths.run must be an absolute path")
 	}
 	seen := map[string]bool{}
 	for _, p := range c.Pools {
