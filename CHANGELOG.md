@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/a1678991/github-runner/compare/v0.4.0...v0.4.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **docker:** install unzip and enable APT::Get::Assume-Yes for GitHub runner parity ([#2](https://github.com/a1678991/github-runner/issues/2)) ([18fbe46](https://github.com/a1678991/github-runner/commit/18fbe465ec3a6eb7173a6394cb567b43bae914fb))
+
 ## [0.4.0](https://github.com/a1678991/github-runner/compare/v0.3.0...v0.4.0) (2026-06-13)
 
 
