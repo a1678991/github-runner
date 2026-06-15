@@ -191,7 +191,7 @@ func runSetup(ctx context.Context, configPath string) error {
 	}
 
 	if cfg.HasBackend("qemu") {
-		base := filepath.Join(cfg.StateDir, "images", "base.qcow2")
+		base := filepath.Join(cfg.Paths.Images, "base.qcow2")
 		if _, err := os.Stat(base); err != nil {
 			fmt.Printf("note  base image missing; run `github-qemu-runner refresh-image`\n")
 		} else {
