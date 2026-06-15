@@ -75,7 +75,7 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 			return err
 		}
 		if err := imagebake.Bake(ctx, imagebake.Options{
-			StateDir: cfg.StateDir,
+			ImageDir: cfg.Paths.Images,
 			APIBase:  cfg.GitHub.APIBaseURL,
 			QEMUBin:  qemuBin,
 			Log:      log,
