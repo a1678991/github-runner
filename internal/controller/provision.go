@@ -17,8 +17,8 @@ import (
 // QEMUProvisioner builds a per-VM working directory (overlay + seed ISO)
 // under RunDir and boots the VM.
 type QEMUProvisioner struct {
-	RunDir   string // <state>/run
-	BasePath string // <state>/images/base.qcow2, absolute
+	RunDir   string // <Paths.Run>
+	BasePath string // <Paths.Images>/base.qcow2, absolute
 	QEMUBin  string
 }
 

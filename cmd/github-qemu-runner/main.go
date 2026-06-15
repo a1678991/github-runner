@@ -75,7 +75,7 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 			return err
 		}
 		if err := imagebake.Bake(ctx, imagebake.Options{
-			StateDir: cfg.StateDir,
+			ImageDir: cfg.Paths.Images,
 			APIBase:  cfg.GitHub.APIBaseURL,
 			QEMUBin:  qemuBin,
 			Log:      log,
@@ -96,7 +96,7 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 			variants = append(variants, "slim")
 		}
 		if err := dockerbackend.Bake(ctx, dockerbackend.BakeOptions{
-			StateDir:  cfg.StateDir,
+			ImageDir:  cfg.Paths.Images,
 			APIBase:   cfg.GitHub.APIBaseURL,
 			DockerBin: dockerBin,
 			Variants:  variants,
@@ -191,7 +191,7 @@ func runSetup(ctx context.Context, configPath string) error {
 	}
 
 	if cfg.HasBackend("qemu") {
-		base := filepath.Join(cfg.StateDir, "images", "base.qcow2")
+		base := filepath.Join(cfg.Paths.Images, "base.qcow2")
 		if _, err := os.Stat(base); err != nil {
 			fmt.Printf("note  base image missing; run `github-qemu-runner refresh-image`\n")
 		} else {

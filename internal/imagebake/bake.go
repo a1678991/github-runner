@@ -1,5 +1,5 @@
 // Package imagebake builds the base VM image: Ubuntu 24.04 cloud image +
-// Docker + actions-runner, flattened into <state>/images/base.qcow2 and
+// Docker + actions-runner, flattened into <ImageDir>/base.qcow2 and
 // swapped in atomically.
 package imagebake
 
@@ -34,7 +34,7 @@ const (
 )
 
 type Options struct {
-	StateDir string
+	ImageDir string
 	HTTP     *http.Client
 	APIBase  string
 	ImageURL string
@@ -239,12 +239,12 @@ func BakeUserData(rel Release) (string, error) {
 	return "#cloud-config\n" + string(b), nil
 }
 
-// Bake produces <state>/images/base.qcow2: download + verify the cloud
+// Bake produces <ImageDir>/base.qcow2: download + verify the cloud
 // image, resolve the runner release, boot a build overlay with the bake
 // seed, require the BAKE-OK serial-console sentinel, flatten, swap.
 func Bake(ctx context.Context, o Options) error {
 	o.defaults()
-	imagesDir := filepath.Join(o.StateDir, "images")
+	imagesDir := o.ImageDir
 	bakeDir := filepath.Join(imagesDir, "bake")
 	if err := os.MkdirAll(bakeDir, 0o755); err != nil {
 		return err

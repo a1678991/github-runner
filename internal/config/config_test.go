@@ -348,6 +348,85 @@ func TestSeccompProfileAccepted(t *testing.T) {
 	}
 }
 
+func TestPathsDefaultToStateDirSubdirs(t *testing.T) {
+	c, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := c.Paths.Images, "/var/lib/github-qemu-runner/images"; got != want {
+		t.Errorf("Paths.Images = %q, want %q", got, want)
+	}
+	if got, want := c.Paths.Run, "/var/lib/github-qemu-runner/run"; got != want {
+		t.Errorf("Paths.Run = %q, want %q", got, want)
+	}
+}
+
+func TestPathsOverride(t *testing.T) {
+	y := validYAML + "paths:\n  images: /mnt/fast/images\n  run: /mnt/fast/run\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Paths.Images != "/mnt/fast/images" {
+		t.Errorf("Paths.Images = %q", c.Paths.Images)
+	}
+	if c.Paths.Run != "/mnt/fast/run" {
+		t.Errorf("Paths.Run = %q", c.Paths.Run)
+	}
+}
+
+func TestPathsRespectStateDirOverride(t *testing.T) {
+	y := validYAML + "state_dir: /srv/ghq\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := c.Paths.Images, "/srv/ghq/images"; got != want {
+		t.Errorf("Paths.Images = %q, want %q", got, want)
+	}
+	if got, want := c.Paths.Run, "/srv/ghq/run"; got != want {
+		t.Errorf("Paths.Run = %q, want %q", got, want)
+	}
+}
+
+func TestPathsEnvExpansion(t *testing.T) {
+	t.Setenv("FAST_DISK", "/mnt/fast")
+	y := validYAML + "paths:\n  images: ${FAST_DISK}/images\n  run: ${FAST_DISK}/run\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Paths.Images != "/mnt/fast/images" {
+		t.Errorf("Paths.Images = %q", c.Paths.Images)
+	}
+	if c.Paths.Run != "/mnt/fast/run" {
+		t.Errorf("Paths.Run = %q", c.Paths.Run)
+	}
+}
+
+func TestPathsRelativeRejected(t *testing.T) {
+	cases := []struct{ name, yaml, wantErr string }{
+		{
+			"relative images",
+			validYAML + "paths:\n  images: rel/images\n",
+			"paths.images must be an absolute path",
+		},
+		{
+			"relative run",
+			validYAML + "paths:\n  run: rel/run\n",
+			"paths.run must be an absolute path",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestIsolationValidationErrors(t *testing.T) {
 	cases := []struct{ name, yaml, wantErr string }{
 		{

@@ -31,7 +31,7 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	gh := github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.AppID, cfg.GitHub.InstallationID, key)
 
-	runDir := filepath.Join(cfg.StateDir, "run")
+	runDir := cfg.Paths.Run
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("qemu-system-x86_64 not found: %w", err)
 		}
-		basePath, err := filepath.Abs(filepath.Join(cfg.StateDir, "images", "base.qcow2"))
+		basePath, err := filepath.Abs(filepath.Join(cfg.Paths.Images, "base.qcow2"))
 		if err != nil {
 			return err
 		}

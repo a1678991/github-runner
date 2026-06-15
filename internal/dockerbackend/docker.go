@@ -75,7 +75,7 @@ func RunArgs(name, runtime string, p config.Pool, jitDir string) []string {
 // pool.Provisioner; the per-job workdir under RunDir holds only the JIT
 // config file (bind-mounted read-only into the container).
 type Provisioner struct {
-	RunDir    string // <state>/run
+	RunDir    string // <Paths.Run>
 	DockerBin string
 	Runtime   string // "runsc" or "runc"
 }

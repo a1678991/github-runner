@@ -17,7 +17,7 @@ import (
 )
 
 type BakeOptions struct {
-	StateDir  string
+	ImageDir  string
 	HTTP      *http.Client
 	APIBase   string
 	DockerBin string
@@ -47,7 +47,7 @@ func (o *BakeOptions) defaults() {
 // from the embedded Dockerfile, tagging Image (dind) and/or SlimImage
 // (slim). The build runs natively on this host, so the image arch
 // always matches (arm64 hosts get linux-arm64 runners). A provenance
-// sidecar lands at <state>/images/docker-base.json, mirroring base.json.
+// sidecar lands at <ImageDir>/docker-base.json, mirroring base.json.
 func Bake(ctx context.Context, o BakeOptions) error {
 	o.defaults()
 	tags := map[string]string{"dind": Image, "slim": SlimImage}
@@ -95,7 +95,7 @@ func Bake(ctx context.Context, o BakeOptions) error {
 		}
 	}
 
-	imagesDir := filepath.Join(o.StateDir, "images")
+	imagesDir := o.ImageDir
 	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
 		return err
 	}

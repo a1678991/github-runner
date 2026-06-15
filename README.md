@@ -186,7 +186,9 @@ pools:
 
 | Key | Required | Default | Notes |
 |---|---|---|---|
-| `state_dir` | no | `/var/lib/github-qemu-runner` | Images, per-VM workdirs, runtime state |
+| `state_dir` | no | `/var/lib/github-qemu-runner` | Base for the default `paths.*` directories; also holds anything outside the configurable paths |
+| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`. Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
+| `paths.run` | no | `<state_dir>/run` | Absolute path. Holds per-VM workdirs (QEMU) and jit-config mount staging (Docker). Same ownership caveat as `paths.images` |
 | `docker.runtime` | no | `runsc` | Runtime for docker-backend job containers: `runsc` (gVisor) or `runc` (no sandbox — read the Docker backend section first) |
 
 ### Pools
@@ -386,9 +388,9 @@ runners.
 | | |
 |---|---|
 | Logs | `journalctl -u github-qemu-runner -f` |
-| Per-VM console | `/var/lib/github-qemu-runner/run/<vm>/console.log` (gone after teardown) |
+| Per-VM console | `<paths.run>/<vm>/console.log` (gone after teardown); defaults to `/var/lib/github-qemu-runner/run/<vm>/console.log` |
 | Refresh base image | `sudo -u gh-runner github-qemu-runner refresh-image` (monthly, or after runner/Ubuntu releases; running VMs are unaffected, new VMs pick it up) |
-| Image provenance | `/var/lib/github-qemu-runner/images/base.json` (qemu), `/var/lib/github-qemu-runner/images/docker-base.json` (docker) |
+| Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
 | Stop (drains) | `systemctl stop github-qemu-runner` — idle runners are deregistered immediately; busy ones get `drain_timeout` (default 30 min) to finish |
 | Crash recovery | automatic: systemd restarts; startup reaping kills orphan VMs and deletes stale `ghq-*` runner records |
 
