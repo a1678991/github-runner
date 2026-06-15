@@ -61,22 +61,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          {
-            echo 'json<<RUNNER_RELEASE_EOF'
-            gh api repos/actions/runner/releases/latest
-            echo 'RUNNER_RELEASE_EOF'
-          } >> "$GITHUB_OUTPUT"
+          json_b64=$(gh api repos/actions/runner/releases/latest | base64 -w0)
+          echo "json_b64=${json_b64}" >> "$GITHUB_OUTPUT"
 
       - name: Parse runner release
         id: runner
         env:
-          REL_JSON: ${{ steps.fetch-rel.outputs.json }}
+          REL_JSON_B64: ${{ steps.fetch-rel.outputs.json_b64 }}
         run: |
-          version=$(echo "$REL_JSON" | jq -r .tag_name | cut -c2-)
+          rel=$(echo "$REL_JSON_B64" | base64 -d)
+          version=$(echo "$rel" | jq -r .tag_name | cut -c2-)
           arch="x64"
           asset="actions-runner-linux-${arch}-${version}.tar.gz"
-          url=$(echo "$REL_JSON" | jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .browser_download_url')
-          sha=$(echo "$REL_JSON" | grep -oP "(?<=${arch} SHA256: )[0-9a-f]{64}" || true)
+          url=$(echo "$rel" | jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .browser_download_url')
+          sha=$(echo "$rel" | grep -oP "(?<=${arch} SHA256: )[0-9a-f]{64}" || true)
           {
             echo "version=${version}"
             echo "url=${url}"
