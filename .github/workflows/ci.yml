@@ -48,3 +48,52 @@ jobs:
           persist-credentials: false
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
       - run: go build ./...
+
+  docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch runner release metadata
+        id: fetch-rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          json_b64=$(gh api repos/actions/runner/releases/latest | base64 -w0)
+          echo "json_b64=${json_b64}" >> "$GITHUB_OUTPUT"
+
+      - name: Parse runner release
+        id: runner
+        env:
+          REL_JSON_B64: ${{ steps.fetch-rel.outputs.json_b64 }}
+        run: |
+          rel=$(echo "$REL_JSON_B64" | base64 -d)
+          version=$(echo "$rel" | jq -r .tag_name | cut -c2-)
+          arch="x64"
+          asset="actions-runner-linux-${arch}-${version}.tar.gz"
+          url=$(echo "$rel" | jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .browser_download_url')
+          sha=$(echo "$rel" | grep -oP "(?<=${arch} SHA256: )[0-9a-f]{64}" || true)
+          {
+            echo "version=${version}"
+            echo "url=${url}"
+            echo "sha=${sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build runner images (dind + slim)
+        env:
+          RUNNER_VERSION: ${{ steps.runner.outputs.version }}
+          RUNNER_TARBALL_URL: ${{ steps.runner.outputs.url }}
+          RUNNER_TARBALL_SHA256: ${{ steps.runner.outputs.sha }}
+        run: |
+          for target in dind slim; do
+            docker build \
+              --pull --target "$target" \
+              --build-arg "RUNNER_VERSION=${RUNNER_VERSION}" \
+              --build-arg "RUNNER_TARBALL_URL=${RUNNER_TARBALL_URL}" \
+              --build-arg "RUNNER_TARBALL_SHA256=${RUNNER_TARBALL_SHA256}" \
+              --tag "ghq-runner-${target}:ci-test" \
+              scripts/docker/
+          done
+
