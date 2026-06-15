@@ -96,7 +96,7 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 			variants = append(variants, "slim")
 		}
 		if err := dockerbackend.Bake(ctx, dockerbackend.BakeOptions{
-			StateDir:  cfg.StateDir,
+			ImageDir:  cfg.Paths.Images,
 			APIBase:   cfg.GitHub.APIBaseURL,
 			DockerBin: dockerBin,
 			Variants:  variants,

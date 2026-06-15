@@ -41,9 +41,9 @@ exit 0
 		t.Fatal(err)
 	}
 
-	stateDir := filepath.Join(dir, "state")
+	imageDir := filepath.Join(dir, "images")
 	err := Bake(context.Background(), BakeOptions{
-		StateDir:  stateDir,
+		ImageDir:  imageDir,
 		HTTP:      api.Client(),
 		APIBase:   api.URL,
 		DockerBin: dockerBin,
@@ -74,7 +74,7 @@ exit 0
 	}
 
 	var meta map[string]any
-	b, err := os.ReadFile(filepath.Join(stateDir, "images", "docker-base.json"))
+	b, err := os.ReadFile(filepath.Join(imageDir, "docker-base.json"))
 	if err != nil {
 		t.Fatalf("provenance: %v", err)
 	}
@@ -113,9 +113,9 @@ exit 0
 		t.Fatal(err)
 	}
 
-	stateDir := filepath.Join(dir, "state")
+	imageDir := filepath.Join(dir, "images")
 	err := Bake(context.Background(), BakeOptions{
-		StateDir:  stateDir,
+		ImageDir:  imageDir,
 		HTTP:      api.Client(),
 		APIBase:   api.URL,
 		DockerBin: dockerBin,
@@ -139,7 +139,7 @@ exit 0
 	}
 
 	var meta map[string]any
-	b, err := os.ReadFile(filepath.Join(stateDir, "images", "docker-base.json"))
+	b, err := os.ReadFile(filepath.Join(imageDir, "docker-base.json"))
 	if err != nil {
 		t.Fatalf("provenance: %v", err)
 	}
@@ -153,7 +153,7 @@ exit 0
 
 func TestBakeRejectsUnknownVariant(t *testing.T) {
 	err := Bake(context.Background(), BakeOptions{
-		StateDir:  t.TempDir(),
+		ImageDir:  t.TempDir(),
 		DockerBin: "/bin/false",
 		Variants:  []string{"fat"},
 		Log:       slog.New(slog.DiscardHandler),
