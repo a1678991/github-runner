@@ -11,6 +11,13 @@ github:
 
 # state_dir: /var/lib/github-qemu-runner
 
+# Override per-concern subdirectories. Defaults to state_dir/images and
+# state_dir/run when unset; both must be absolute paths if set. Useful
+# for putting qcow2 files on a separate fast disk.
+#paths:
+#  images: /mnt/fast/github-qemu-runner/images
+#  run:    /mnt/fast/github-qemu-runner/run
+
 # Docker backend (for hosts without /dev/kvm). Jobs run in gVisor-sandboxed
 # containers; see "Docker backend" in the README for host prerequisites.
 #docker:
