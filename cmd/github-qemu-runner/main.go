@@ -23,7 +23,7 @@ import (
 	"github.com/a1678991/github-qemu-runner/internal/controller"
 	"github.com/a1678991/github-qemu-runner/internal/dockerbackend"
 	"github.com/a1678991/github-qemu-runner/internal/github"
-	"github.com/a1678991/github-qemu-runner/internal/imagebake"
+	"github.com/a1678991/github-qemu-runner/internal/imageprep"
 )
 
 func main() {
@@ -61,6 +61,11 @@ func runController(ctx context.Context, configPath string, log *slog.Logger) err
 	if err != nil {
 		return err
 	}
+	if cfg.Images.AutoRefresh != nil && *cfg.Images.AutoRefresh {
+		if err := imageprep.Ensure(ctx, cfg, log, false); err != nil {
+			return fmt.Errorf("auto image refresh: %w", err)
+		}
+	}
 	return controller.Run(ctx, cfg, log)
 }
 
@@ -69,43 +74,7 @@ func runRefreshImage(ctx context.Context, configPath string, log *slog.Logger) e
 	if err != nil {
 		return err
 	}
-	if cfg.HasBackend("qemu") {
-		qemuBin, err := exec.LookPath("qemu-system-x86_64")
-		if err != nil {
-			return err
-		}
-		if err := imagebake.Bake(ctx, imagebake.Options{
-			ImageDir: cfg.Paths.Images,
-			APIBase:  cfg.GitHub.APIBaseURL,
-			QEMUBin:  qemuBin,
-			Log:      log,
-		}); err != nil {
-			return err
-		}
-	}
-	if cfg.HasBackend("docker") {
-		dockerBin, err := exec.LookPath("docker")
-		if err != nil {
-			return err
-		}
-		var variants []string
-		if cfg.HasDockerIsolation("gvisor") {
-			variants = append(variants, "dind")
-		}
-		if cfg.HasDockerIsolation("seccomp") {
-			variants = append(variants, "slim")
-		}
-		if err := dockerbackend.Bake(ctx, dockerbackend.BakeOptions{
-			ImageDir:  cfg.Paths.Images,
-			APIBase:   cfg.GitHub.APIBaseURL,
-			DockerBin: dockerBin,
-			Variants:  variants,
-			Log:       log,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return imageprep.Ensure(ctx, cfg, log, true)
 }
 
 func runSetup(ctx context.Context, configPath string) error {
