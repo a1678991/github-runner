@@ -18,6 +18,12 @@ github:
 #  images: /mnt/fast/github-qemu-runner/images
 #  run:    /mnt/fast/github-qemu-runner/run
 
+# Image auto-refresh. When the controller starts and a required base/runner
+# image is missing, bake it automatically instead of failing. Set to false
+# to restore fail-fast (run `refresh-image` manually first).
+#images:
+#  auto_refresh: true
+
 # Docker backend (for hosts without /dev/kvm). Jobs run in gVisor-sandboxed
 # containers; see "Docker backend" in the README for host prerequisites.
 #docker:
