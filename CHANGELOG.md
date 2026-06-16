@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/a1678991/github-runner/compare/v0.4.1...v0.5.0) (2026-06-16)
+
+
+### Features
+
+* auto image refresh on controller start + scheduled refresh timer ([#7](https://github.com/a1678991/github-runner/issues/7)) ([55352bf](https://github.com/a1678991/github-runner/commit/55352bf05a43031b96d385a98f79d3a0c435715f))
+* configurable paths.images and paths.run ([#4](https://github.com/a1678991/github-runner/issues/4)) ([e4aad11](https://github.com/a1678991/github-runner/commit/e4aad11b21498498fb7408861b570dcff3231fd8))
+
+
+### Bug Fixes
+
+* **bake:** terminate apt.conf assume-yes line with a semicolon ([#6](https://github.com/a1678991/github-runner/issues/6)) ([fc4e636](https://github.com/a1678991/github-runner/commit/fc4e636ccc09ad6a0ce29de7d4148ef84242a9d0))
+
 ## [0.4.1](https://github.com/a1678991/github-runner/compare/v0.4.0...v0.4.1) (2026-06-15)
 
 
