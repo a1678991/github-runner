@@ -6,6 +6,20 @@
 set -euxo pipefail
 exec >/dev/console 2>&1
 
+# Always power off when this script exits, success or failure. The host's
+# only success signal is the BAKE-OK sentinel on the serial console; on any
+# failure `set -e` aborts before BAKE-OK is printed, so powering off here
+# makes a failed bake end in seconds (host sees no sentinel, fails fast)
+# instead of hanging until the host's 30-minute timeout.
+poweroff_on_exit() {
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "BAKE-FAILED rc=$rc"
+  fi
+  poweroff -f
+}
+trap poweroff_on_exit EXIT
+
 # Written by the bake user-data: VERSION, TARBALL_URL, TARBALL_SHA256.
 # shellcheck disable=SC1091
 source /run/bake-env
@@ -21,7 +35,7 @@ chmod 0440 /etc/sudoers.d/runner
 apt-get update
 apt-get install -y --no-install-recommends \
   git curl ca-certificates jq build-essential sudo docker.io unzip
-echo 'APT::Get::Assume-Yes "true"' >/etc/apt/apt.conf.d/90assume-yes
+echo 'APT::Get::Assume-Yes "true";' >/etc/apt/apt.conf.d/90assume-yes
 usermod -aG docker runner
 systemctl enable docker
 
@@ -41,4 +55,4 @@ install -m 0755 /run/run-one-job /usr/local/bin/run-one-job
 cloud-init clean --logs --machine-id
 
 echo "BAKE-OK"
-poweroff
+# poweroff is handled by the EXIT trap above.

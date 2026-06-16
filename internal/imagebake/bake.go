@@ -306,7 +306,7 @@ func Bake(ctx context.Context, o Options) error {
 	case <-vm.Done():
 	case <-time.After(o.Timeout):
 		_ = vm.Kill()
-		return fmt.Errorf("bake timed out after %v", o.Timeout)
+		return fmt.Errorf("bake timed out after %v; console tail:\n%s", o.Timeout, consoleTail(console))
 	case <-ctx.Done():
 		_ = vm.Kill()
 		return ctx.Err()
@@ -317,11 +317,7 @@ func Bake(ctx context.Context, o Options) error {
 		return fmt.Errorf("read console log: %w", err)
 	}
 	if !bytes.Contains(consoleOut, []byte("BAKE-OK")) {
-		tail := consoleOut
-		if len(tail) > 2000 {
-			tail = tail[len(tail)-2000:]
-		}
-		return fmt.Errorf("bake failed (no BAKE-OK sentinel); console tail:\n%s", tail)
+		return fmt.Errorf("bake failed (no BAKE-OK sentinel); console tail:\n%s", lastBytes(consoleOut, 2000))
 	}
 
 	newBase := filepath.Join(imagesDir, "base.qcow2.new")
@@ -346,6 +342,25 @@ func Bake(ctx context.Context, o Options) error {
 	}
 	o.Log.Info("bake complete", "base", filepath.Join(imagesDir, "base.qcow2"))
 	return nil
+}
+
+// consoleTail returns the last 2 KiB of the bake VM's serial console for
+// embedding in an error, or a placeholder if the log can't be read. Used on
+// the timeout path, where there is no consoleOut already in hand.
+func consoleTail(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("(console log unavailable: %v)", err)
+	}
+	return string(lastBytes(b, 2000))
+}
+
+// lastBytes returns the final n bytes of b, or all of b if it is shorter.
+func lastBytes(b []byte, n int) []byte {
+	if len(b) > n {
+		return b[len(b)-n:]
+	}
+	return b
 }
 
 func fetchAll(ctx context.Context, client *http.Client, url string) ([]byte, error) {
