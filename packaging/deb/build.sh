@@ -36,6 +36,11 @@ CGO_ENABLED=0 GOARCH="$arch" go build -trimpath -ldflags '-s -w' \
 sed 's|/usr/local/bin/github-qemu-runner|/usr/bin/github-qemu-runner|' \
   packaging/github-qemu-runner.service >"$staging/github-qemu-runner.service"
 
+# Same /usr/local/bin -> /usr/bin rewrite for the refresh service. The
+# timer carries no exec path, so nfpm ships it verbatim from packaging/.
+sed 's|/usr/local/bin/github-qemu-runner|/usr/bin/github-qemu-runner|' \
+  packaging/github-qemu-runner-refresh.service >"$staging/github-qemu-runner-refresh.service"
+
 # Plain-text copyright file (LICENSE verbatim) and a one-stanza
 # changelog.gz — the minimum /usr/share/doc lintian expects.
 cp LICENSE "$staging/copyright"

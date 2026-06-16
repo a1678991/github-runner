@@ -27,6 +27,11 @@ contents:
   - src: ${DEB_STAGING}/github-qemu-runner.service
     dst: /usr/lib/systemd/system/github-qemu-runner.service
     expand: true
+  - src: ${DEB_STAGING}/github-qemu-runner-refresh.service
+    dst: /usr/lib/systemd/system/github-qemu-runner-refresh.service
+    expand: true
+  - src: packaging/github-qemu-runner-refresh.timer
+    dst: /usr/lib/systemd/system/github-qemu-runner-refresh.timer
   - src: packaging/config.example.yaml
     dst: /etc/github-qemu-runner/config.example.yaml
     type: config
