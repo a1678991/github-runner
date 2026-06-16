@@ -267,8 +267,8 @@ github-qemu-runner [-config PATH] <controller|refresh-image|setup>
 
 `images.auto_refresh` only bakes images that are *missing* at controller
 start. To keep images current (new actions/runner or Ubuntu releases),
-enable the bundled timer — shipped by the Arch/Debian packages, **off by
-default**:
+enable the bundled timer — shipped by the Arch/Debian packages (and the
+manual install above), **off by default**:
 
 ```bash
 sudo systemctl enable --now github-qemu-runner-refresh.timer
@@ -305,6 +305,9 @@ sudo -u gh-runner github-qemu-runner setup          # preflight: all "ok"?
 sudo -u gh-runner github-qemu-runner refresh-image  # bake base image (~10 min)
 
 sudo cp packaging/github-qemu-runner.service /etc/systemd/system/
+# Optional: scheduled image refresh (see "Scheduled image refresh"); off until enabled
+sudo cp packaging/github-qemu-runner-refresh.service \
+  packaging/github-qemu-runner-refresh.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now github-qemu-runner
 ```
