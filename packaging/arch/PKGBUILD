@@ -44,10 +44,15 @@ package() {
   install -Dm755 github-qemu-runner "$pkgdir/usr/bin/github-qemu-runner"
   install -Dm644 packaging/github-qemu-runner.service \
     "$pkgdir/usr/lib/systemd/system/github-qemu-runner.service"
-  # The shared unit targets the manual-install path (/usr/local/bin); the
+  install -Dm644 packaging/github-qemu-runner-refresh.service \
+    "$pkgdir/usr/lib/systemd/system/github-qemu-runner-refresh.service"
+  install -Dm644 packaging/github-qemu-runner-refresh.timer \
+    "$pkgdir/usr/lib/systemd/system/github-qemu-runner-refresh.timer"
+  # The shared units target the manual-install path (/usr/local/bin); the
   # packaged binary lives in /usr/bin.
   sed -i 's|/usr/local/bin/github-qemu-runner|/usr/bin/github-qemu-runner|' \
-    "$pkgdir/usr/lib/systemd/system/github-qemu-runner.service"
+    "$pkgdir/usr/lib/systemd/system/github-qemu-runner.service" \
+    "$pkgdir/usr/lib/systemd/system/github-qemu-runner-refresh.service"
   install -Dm644 packaging/config.example.yaml \
     "$pkgdir/etc/github-qemu-runner/config.example.yaml"
   install -Dm644 packaging/arch/github-qemu-runner.sysusers \

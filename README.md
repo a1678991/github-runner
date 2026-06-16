@@ -190,6 +190,7 @@ pools:
 | `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`. Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
 | `paths.run` | no | `<state_dir>/run` | Absolute path. Holds per-VM workdirs (QEMU) and jit-config mount staging (Docker). Same ownership caveat as `paths.images` |
 | `docker.runtime` | no | `runsc` | Runtime for docker-backend job containers: `runsc` (gVisor) or `runc` (no sandbox — read the Docker backend section first) |
+| `images.auto_refresh` | no | `true` | When the controller starts and a required image is missing, bake it instead of failing. Set `false` to restore fail-fast (`refresh-image` must be run manually first) |
 
 ### Pools
 
@@ -262,6 +263,28 @@ github-qemu-runner [-config PATH] <controller|refresh-image|setup>
 | `refresh-image` | Bakes (or re-bakes) the base images for whichever backends the pools use. Run after install and then periodically |
 | `controller` | Runs the pools (the systemd service; also the default when no command is given) |
 
+## Scheduled image refresh
+
+`images.auto_refresh` only bakes images that are *missing* at controller
+start. To keep images current (new actions/runner or Ubuntu releases),
+enable the bundled timer — shipped by the Arch/Debian packages (and the
+manual install above), **off by default**:
+
+```bash
+sudo systemctl enable --now github-qemu-runner-refresh.timer
+```
+
+It runs `refresh-image` weekly. Change the schedule with a drop-in:
+
+```bash
+sudo systemctl edit github-qemu-runner-refresh.timer
+# [Timer]
+# OnCalendar=daily
+```
+
+Running VMs/containers are unaffected; new ones pick up the rebaked image.
+On NixOS use the module options instead (see Install (NixOS)).
+
 ## Install (manual)
 
 ```bash
@@ -282,6 +305,9 @@ sudo -u gh-runner github-qemu-runner setup          # preflight: all "ok"?
 sudo -u gh-runner github-qemu-runner refresh-image  # bake base image (~10 min)
 
 sudo cp packaging/github-qemu-runner.service /etc/systemd/system/
+# Optional: scheduled image refresh (see "Scheduled image refresh"); off until enabled
+sudo cp packaging/github-qemu-runner-refresh.service \
+  packaging/github-qemu-runner-refresh.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now github-qemu-runner
 ```
@@ -364,6 +390,15 @@ drains every runner slot, so restart manually when convenient.
 }
 ```
 
+To enable the periodic image-refresh timer (off by default), add:
+
+```nix
+services.github-qemu-runner.refresh = {
+  enable = true;
+  schedule = "daily"; # any systemd OnCalendar value; default "weekly"
+};
+```
+
 The module wires the key via systemd `LoadCredential`; for manual
 `setup`/`refresh-image` runs use
 `systemd-run -P --wait -p LoadCredential=app-key.pem:/run/secrets/app-key.pem github-qemu-runner ... setup`.
@@ -390,6 +425,7 @@ runners.
 | Logs | `journalctl -u github-qemu-runner -f` |
 | Per-VM console | `<paths.run>/<vm>/console.log` (gone after teardown); defaults to `/var/lib/github-qemu-runner/run/<vm>/console.log` |
 | Refresh base image | `sudo -u gh-runner github-qemu-runner refresh-image` (monthly, or after runner/Ubuntu releases; running VMs are unaffected, new VMs pick it up) |
+| Scheduled refresh | enable `github-qemu-runner-refresh.timer` (off by default; weekly) — see "Scheduled image refresh" |
 | Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
 | Stop (drains) | `systemctl stop github-qemu-runner` — idle runners are deregistered immediately; busy ones get `drain_timeout` (default 30 min) to finish |
 | Crash recovery | automatic: systemd restarts; startup reaping kills orphan VMs and deletes stale `ghq-*` runner records |

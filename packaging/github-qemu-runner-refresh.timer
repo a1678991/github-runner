@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh github-qemu-runner images
+Documentation=https://github.com/a1678991/github-qemu-runner
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

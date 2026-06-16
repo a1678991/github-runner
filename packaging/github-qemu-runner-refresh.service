@@ -1,0 +1,25 @@
+[Unit]
+Description=Refresh github-qemu-runner base/runner images
+Documentation=https://github.com/a1678991/github-qemu-runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gh-runner
+Group=gh-runner
+SupplementaryGroups=kvm
+ExecStart=/usr/local/bin/github-qemu-runner -config /etc/github-qemu-runner/config.yaml refresh-image
+# A bake (cloud-image download + VM boot, or a docker build) far exceeds
+# systemd's 90s default start timeout, which would otherwise kill it.
+TimeoutStartSec=30min
+
+# Hardening mirrors github-qemu-runner.service. No LoadCredential: the
+# image bake hits only public GitHub release / cloud-image endpoints and
+# needs no GitHub App auth.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+StateDirectory=github-qemu-runner
+ReadWritePaths=/var/lib/github-qemu-runner

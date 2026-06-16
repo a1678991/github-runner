@@ -427,6 +427,27 @@ func TestPathsRelativeRejected(t *testing.T) {
 	}
 }
 
+func TestAutoRefreshDefaultsTrue(t *testing.T) {
+	c, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Images.AutoRefresh == nil || !*c.Images.AutoRefresh {
+		t.Errorf("Images.AutoRefresh = %v, want non-nil true", c.Images.AutoRefresh)
+	}
+}
+
+func TestAutoRefreshExplicitFalse(t *testing.T) {
+	y := validYAML + "images:\n  auto_refresh: false\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Images.AutoRefresh == nil || *c.Images.AutoRefresh {
+		t.Errorf("Images.AutoRefresh = %v, want non-nil false", c.Images.AutoRefresh)
+	}
+}
+
 func TestIsolationValidationErrors(t *testing.T) {
 	cases := []struct{ name, yaml, wantErr string }{
 		{
