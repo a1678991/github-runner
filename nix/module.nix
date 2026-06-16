@@ -45,6 +45,19 @@ in
         `systemd-run -P --wait -p LoadCredential=app-key.pem:<path> ...`.
       '';
     };
+
+    refresh = {
+      enable = lib.mkEnableOption "periodic image refresh via a systemd timer";
+      schedule = lib.mkOption {
+        type = lib.types.str;
+        default = "weekly";
+        example = "daily";
+        description = ''
+          systemd OnCalendar expression for the image refresh timer.
+          Only used when refresh.enable is true.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -86,6 +99,41 @@ in
         StateDirectory = "github-qemu-runner";
         ReadWritePaths = [ "/var/lib/github-qemu-runner" ];
         LoadCredential = [ "app-key.pem:${cfg.privateKeyFile}" ];
+      };
+    };
+
+    systemd.services.github-qemu-runner-refresh = lib.mkIf cfg.refresh.enable {
+      description = "Refresh github-qemu-runner base/runner images";
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      path = [
+        pkgs.qemu_kvm
+        pkgs.cdrkit
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        User = "gh-runner";
+        Group = "gh-runner";
+        SupplementaryGroups = [ "kvm" ];
+        # No LoadCredential: the bake needs no GitHub App auth.
+        ExecStart = "${lib.getExe cfg.package} -config ${configFile} refresh-image";
+        TimeoutStartSec = "30min";
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        StateDirectory = "github-qemu-runner";
+        ReadWritePaths = [ "/var/lib/github-qemu-runner" ];
+      };
+    };
+
+    systemd.timers.github-qemu-runner-refresh = lib.mkIf cfg.refresh.enable {
+      description = "Periodically refresh github-qemu-runner images";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = cfg.refresh.schedule;
+        Persistent = true;
+        RandomizedDelaySec = "1h";
       };
     };
   };
