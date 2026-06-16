@@ -32,6 +32,7 @@ type Config struct {
 	GitHub   GitHub `yaml:"github"`
 	StateDir string `yaml:"state_dir"`
 	Paths    Paths  `yaml:"paths"`
+	Images   Images `yaml:"images"`
 	Docker   Docker `yaml:"docker"`
 	Pools    []Pool `yaml:"pools"`
 }
@@ -47,6 +48,14 @@ type Paths struct {
 	// QMP socket, PID file) for QEMU pools, and the jit-config mount
 	// staging directory for docker pools.
 	Run string `yaml:"run"`
+}
+
+// Images configures base/runner image lifecycle.
+type Images struct {
+	// AutoRefresh bakes missing images on controller start instead of
+	// failing. Pointer so an absent key defaults to true (a plain bool's
+	// zero value is false, which would invert the intended default).
+	AutoRefresh *bool `yaml:"auto_refresh"`
 }
 
 type GitHub struct {
@@ -133,6 +142,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Paths.Run == "" {
 		c.Paths.Run = filepath.Join(c.StateDir, "run")
+	}
+	if c.Images.AutoRefresh == nil {
+		on := true
+		c.Images.AutoRefresh = &on
 	}
 	// Lets the systemd unit pass the App key via LoadCredential:
 	// private_key_path: ${CREDENTIALS_DIRECTORY}/app-key.pem
