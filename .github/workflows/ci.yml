@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs: a new push to the same branch/PR cancels the
+# in-progress run instead of letting it finish on stale commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -96,4 +102,61 @@ jobs:
               --tag "ghq-runner-${target}:ci-test" \
               scripts/docker/
           done
+
+  bake-provision:
+    # Runs the REAL scripts/guest/bake.sh guest-provisioning path inside an
+    # ubuntu:24.04 container (no VM). Free hosted runners can't give reliable
+    # KVM (https://github.com/orgs/community/discussions/8305), so this can't
+    # boot a VM — but it executes the actual bake.sh, so a regression in the
+    # apt / apt.conf / docker / runner-install steps (e.g. a malformed
+    # apt.conf) fails CI here. It does NOT cover the qemu boot, cloud-init, or
+    # image-flatten steps; those VM-only commands are shimmed to no-ops.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve latest actions/runner release
+        id: runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(gh api repos/actions/runner/releases/latest --jq '.tag_name' | cut -c2-)
+          url=$(gh api repos/actions/runner/releases/latest \
+            --jq ".assets[] | select(.name == \"actions-runner-linux-x64-${ver}.tar.gz\") | .browser_download_url")
+          {
+            echo "version=$ver"
+            echo "url=$url"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Provision in a container (real bake.sh, VM-only steps shimmed)
+        env:
+          VERSION: ${{ steps.runner.outputs.version }}
+          TARBALL_URL: ${{ steps.runner.outputs.url }}
+        run: |
+          # The $VARS below are expanded by bash INSIDE the container (passed
+          # via -e), not by this outer shell — hence the single quotes.
+          # shellcheck disable=SC2016
+          docker run --rm \
+            -e VERSION -e TARBALL_URL \
+            -v "$PWD/scripts/guest:/guest:ro" \
+            ubuntu:24.04 bash -c '
+              set -eux
+              # The cloud image preinstalls sudo + /etc/sudoers.d and runs
+              # under systemd/cloud-init; the minimal base image does not, so
+              # create that dir and shim the VM-only commands bake.sh calls.
+              mkdir -p /run /shim /etc/sudoers.d
+              # SHA omitted: bake.sh then relies on TLS; runner SHA parsing is
+              # covered by the imagebake unit tests.
+              { echo "VERSION=$VERSION"; echo "TARBALL_URL=$TARBALL_URL"; echo "TARBALL_SHA256="; } > /run/bake-env
+              cp /guest/run-one-job.sh /run/run-one-job
+              for c in systemctl poweroff cloud-init; do
+                printf "#!/bin/sh\nexit 0\n" > "/shim/$c"; chmod +x "/shim/$c"
+              done
+              export PATH="/shim:$PATH"
+              ln -sf /dev/stdout /dev/console   # bake.sh does exec >/dev/console
+              exec bash /guest/bake.sh
+            '
 
