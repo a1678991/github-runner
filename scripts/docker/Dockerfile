@@ -41,7 +41,8 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
     rm -rf /var/lib/apt/lists/* && \
-    usermod -aG docker runner
+    usermod -aG docker runner && \
+    docker buildx version && docker compose version
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
