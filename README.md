@@ -38,8 +38,10 @@ slot, forever:
 5. The guest runs exactly one job, then powers off; the QEMU process exits
 6. Delete the workdir + runner record, loop
 
-`refresh-image` bakes the base image: Ubuntu 24.04 cloud image + Docker +
-actions-runner (latest, checksum-verified), flattened to
+`refresh-image` bakes the base image: Ubuntu 24.04 cloud image + Docker CE
+(with the buildx and compose v2 plugins, so `docker build` and
+`docker compose` work in jobs) + actions-runner (latest,
+checksum-verified), flattened to
 `/var/lib/github-qemu-runner/images/base.qcow2`.
 
 ## Docker backend (hosts without /dev/kvm)
@@ -48,8 +50,8 @@ Pools with `backend: docker` run each job in a disposable Docker container
 sandboxed by gVisor instead of a VM — for hosts without nested
 virtualization (e.g. OCI Ampere A1 free-tier instances) and for arm64.
 Jobs keep full Docker support: a private dockerd runs *inside* the
-sandboxed container (DinD), so `container:` jobs, service containers, and
-`docker build` work as on the QEMU backend.
+sandboxed container (DinD), so `container:` jobs, service containers,
+`docker build`, and `docker compose` work as on the QEMU backend.
 
 Security trade-off, explicitly: gVisor is a userspace-kernel sandbox —
 weaker than a KVM VM, far stronger than a plain container. The job
@@ -88,9 +90,10 @@ Trade-offs, explicitly:
   Isolation ladder: qemu > gvisor > seccomp > `docker.runtime: runc`
   (privileged + unconfined). Note that seccomp mode is strictly stronger
   than the `runtime: runc` escape hatch.
-- **No Docker inside jobs:** `container:` jobs, service containers, and
-  `docker build` fail (the slim image `ghq-runner-slim:latest` ships no
-  Docker Engine). Keep such jobs on a gvisor pool — one host can run both.
+- **No Docker inside jobs:** `container:` jobs, service containers,
+  `docker build`, and `docker compose` fail (the slim image
+  `ghq-runner-slim:latest` ships no Docker Engine). Keep such jobs on a
+  gvisor pool — one host can run both.
 - `sudo`/`apt-get` keep working (GitHub-hosted parity); `docker.runtime` is
   ignored by seccomp pools.
 - `seccomp_profile` (absolute path) swaps in a custom profile instead of
