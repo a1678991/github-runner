@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/a1678991/github-runner/compare/v0.5.0...v0.6.0) (2026-07-05)
+
+
+### Features
+
+* add Docker Compose v2 and buildx to job runner images ([#8](https://github.com/a1678991/github-runner/issues/8)) ([aace671](https://github.com/a1678991/github-runner/commit/aace67177a076d1842ad3045bbae7e05c9864778))
+
 ## [0.5.0](https://github.com/a1678991/github-runner/compare/v0.4.1...v0.5.0) (2026-06-16)
 
 
