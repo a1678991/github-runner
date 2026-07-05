@@ -34,10 +34,29 @@ chmod 0440 /etc/sudoers.d/runner
 
 apt-get update
 apt-get install -y --no-install-recommends \
-  git curl ca-certificates jq build-essential sudo docker.io unzip
+  git curl ca-certificates jq build-essential sudo unzip
 echo 'APT::Get::Assume-Yes "true";' >/etc/apt/apt.conf.d/90assume-yes
+
+# Docker CE from Docker's official repo — same distribution as the docker
+# backend's dind image, and the only one shipping the buildx + compose v2
+# CLI plugins (Ubuntu's docker.io has neither). Codename and arch are read
+# from the guest so a non-noble imagebake.image_url keeps working.
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+# shellcheck disable=SC1091
+. /etc/os-release
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+  >/etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y --no-install-recommends \
+  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 usermod -aG docker runner
 systemctl enable docker
+
+# Plugin discovery must work or the bake fails (no BAKE-OK): these are the
+# commands jobs will run.
+docker buildx version
+docker compose version
 
 mkdir -p /opt/actions-runner
 curl -fsSL "$TARBALL_URL" -o /tmp/runner.tar.gz
