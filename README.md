@@ -90,9 +90,10 @@ Trade-offs, explicitly:
   Isolation ladder: qemu > gvisor > seccomp > `docker.runtime: runc`
   (privileged + unconfined). Note that seccomp mode is strictly stronger
   than the `runtime: runc` escape hatch.
-- **No Docker inside jobs:** `container:` jobs, service containers, and
-  `docker build` fail (the slim image `ghq-runner-slim:latest` ships no
-  Docker Engine). Keep such jobs on a gvisor pool — one host can run both.
+- **No Docker inside jobs:** `container:` jobs, service containers,
+  `docker build`, and `docker compose` fail (the slim image
+  `ghq-runner-slim:latest` ships no Docker Engine). Keep such jobs on a
+  gvisor pool — one host can run both.
 - `sudo`/`apt-get` keep working (GitHub-hosted parity); `docker.runtime` is
   ignored by seccomp pools.
 - `seccomp_profile` (absolute path) swaps in a custom profile instead of

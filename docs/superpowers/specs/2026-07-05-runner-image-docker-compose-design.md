@@ -114,8 +114,14 @@ timer (2026-06-16 auto-image-refresh design). No migration step.
     mention Docker CE with compose v2 + buildx plugins.
   - Docker-backend section ("`container:` jobs, service containers, and
     `docker build` work…") — add `docker compose` to the list.
-- `packaging/arch/src/github-qemu-runner-git/README.md` line ~22 —
-  same "bakes the base image" sentence, same update.
+- ~~`packaging/arch/src/github-qemu-runner-git/README.md` line ~22 —
+  same "bakes the base image" sentence, same update.~~
+  **Correction (2026-07-05, discovered during execution):** that path is
+  a gitignored makepkg build artifact (`packaging/arch/.gitignore`
+  ignores `/src/`), not a tracked file. `packaging/arch/PKGBUILD`
+  installs the repo-root `README.md` into the package at build time
+  (`install -Dm644 README.md …`), so no second tracked README exists and
+  the main-README edit above is sufficient.
 
 ## Open questions
 

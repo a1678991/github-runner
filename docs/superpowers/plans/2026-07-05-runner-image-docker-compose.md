@@ -167,7 +167,12 @@ Expected: lefthook pre-commit and commitlint pass.
 
 **Files:**
 - Modify: `README.md:41-43` and `README.md:50-52`
-- Modify: `packaging/arch/src/github-qemu-runner-git/README.md:22-24`
+- ~~Modify: `packaging/arch/src/github-qemu-runner-git/README.md:22-24`~~
+  **Correction (2026-07-05, discovered during execution):** that path is
+  a gitignored makepkg build artifact (`packaging/arch/.gitignore`
+  ignores `/src/`), not a tracked file. `packaging/arch/PKGBUILD`
+  installs the repo-root `README.md` into the package at build time, so
+  no second tracked README exists — Step 2 below was skipped.
 
 **Interfaces:**
 - Consumes: nothing from other tasks (text-only).
