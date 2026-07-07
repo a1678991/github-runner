@@ -31,10 +31,15 @@ export DEBIAN_FRONTEND=noninteractive
 # `apt-get`. Guest OS updates land via image refresh (the dist-upgrade
 # below), never inside a job VM. Stop the services too: the timers may have
 # already fired on this bake boot, and a running apt-daily would hold the
-# lock against the purge and everything after it.
+# lock against the purge and everything after it. Guarded: minimal bases
+# (CI's bake-provision container, a custom imagebake.image_url) ship
+# without the package, and purging a name apt can't resolve is an error.
 systemctl mask --now apt-daily.timer apt-daily-upgrade.timer
-systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service
-apt-get purge -y unattended-upgrades
+systemctl stop apt-daily.service apt-daily-upgrade.service
+if dpkg -s unattended-upgrades >/dev/null 2>&1; then
+  systemctl stop unattended-upgrades.service
+  apt-get purge -y unattended-upgrades
+fi
 
 useradd --create-home --shell /bin/bash runner
 # Passwordless sudo matches GitHub-hosted images; the disposable VM is the
