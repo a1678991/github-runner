@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/a1678991/github-runner/compare/v0.6.0...v0.6.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **bake:** disable unattended-upgrades in job VMs; upgrade OS at bake time ([#10](https://github.com/a1678991/github-runner/issues/10)) ([088ea34](https://github.com/a1678991/github-runner/commit/088ea348890a34dd795d329e93ad335cb84e913b))
+
 ## [0.6.0](https://github.com/a1678991/github-runner/compare/v0.5.0...v0.6.0) (2026-07-05)
 
 
