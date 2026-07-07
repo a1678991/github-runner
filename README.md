@@ -42,7 +42,10 @@ slot, forever:
 (with the buildx and compose v2 plugins, so `docker build` and
 `docker compose` work in jobs) + actions-runner (latest,
 checksum-verified), flattened to
-`/var/lib/github-qemu-runner/images/base.qcow2`.
+`/var/lib/github-qemu-runner/images/base.qcow2`. OS package updates are
+applied during the bake, and unattended-upgrades and the apt-daily timers
+are removed from the image — guest OS updates arrive via image refresh,
+so `apt-get` in a job never races a background upgrade for the apt lock.
 
 ## Docker backend (hosts without /dev/kvm)
 

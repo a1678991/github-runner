@@ -26,6 +26,22 @@ source /run/bake-env
 
 export DEBIAN_FRONTEND=noninteractive
 
+# The cloud image ships unattended-upgrades plus the apt-daily timers; in
+# cloned job VMs they grab the apt/dpkg lock at boot and break jobs running
+# `apt-get`. Guest OS updates land via image refresh (the dist-upgrade
+# below), never inside a job VM.
+systemctl mask --now apt-daily.timer apt-daily-upgrade.timer
+# Best-effort: the timers may have already fired on this bake boot, and a
+# running apt-daily would hold the apt/dpkg lock against the steps below.
+# `|| true` because these units may be absent on minimal bases (CI's
+# bake-provision container, a custom imagebake.image_url).
+systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true
+# Guarded separately: purging a package name apt can't even resolve (no
+# lists, not installed) is an error, not a no-op.
+if dpkg -s unattended-upgrades >/dev/null 2>&1; then
+  apt-get purge -y unattended-upgrades
+fi
+
 useradd --create-home --shell /bin/bash runner
 # Passwordless sudo matches GitHub-hosted images; the disposable VM is the
 # trust boundary, and runner is in the docker group (root-equivalent) anyway.
@@ -33,6 +49,7 @@ echo 'runner ALL=(ALL) NOPASSWD:ALL' >/etc/sudoers.d/runner
 chmod 0440 /etc/sudoers.d/runner
 
 apt-get update
+apt-get dist-upgrade -y
 apt-get install -y --no-install-recommends \
   git curl ca-certificates jq build-essential sudo unzip
 echo 'APT::Get::Assume-Yes "true";' >/etc/apt/apt.conf.d/90assume-yes

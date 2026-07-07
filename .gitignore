@@ -27,3 +27,6 @@ packaging/arch/release/*.tar.gz
 
 # deb artifacts (local builds)
 packaging/deb/dist/
+
+# mise
+mise.local.*

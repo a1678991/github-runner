@@ -15,6 +15,13 @@ func TestEmbeddedScripts(t *testing.T) {
 	if !strings.Contains(Bake, "/etc/sudoers.d/runner") {
 		t.Error("Bake must grant runner passwordless sudo (parity with GitHub-hosted images; jobs run `sudo apt-get ...`)")
 	}
+	if !strings.Contains(Bake, "apt-get purge -y unattended-upgrades") ||
+		!strings.Contains(Bake, "systemctl mask --now apt-daily.timer apt-daily-upgrade.timer") {
+		t.Error("Bake must purge unattended-upgrades and mask the apt-daily timers (they grab the apt/dpkg lock at boot in cloned job VMs and break jobs running `apt-get`)")
+	}
+	if !strings.Contains(Bake, "apt-get dist-upgrade") {
+		t.Error("Bake must dist-upgrade during bake (guest OS updates land via image refresh, never in job VMs)")
+	}
 }
 
 func TestDockerAssetsEmbedded(t *testing.T) {
