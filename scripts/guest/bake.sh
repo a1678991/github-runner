@@ -26,6 +26,16 @@ source /run/bake-env
 
 export DEBIAN_FRONTEND=noninteractive
 
+# The cloud image ships unattended-upgrades plus the apt-daily timers; in
+# cloned job VMs they grab the apt/dpkg lock at boot and break jobs running
+# `apt-get`. Guest OS updates land via image refresh (the dist-upgrade
+# below), never inside a job VM. Stop the services too: the timers may have
+# already fired on this bake boot, and a running apt-daily would hold the
+# lock against the purge and everything after it.
+systemctl mask --now apt-daily.timer apt-daily-upgrade.timer
+systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service
+apt-get purge -y unattended-upgrades
+
 useradd --create-home --shell /bin/bash runner
 # Passwordless sudo matches GitHub-hosted images; the disposable VM is the
 # trust boundary, and runner is in the docker group (root-equivalent) anyway.
@@ -33,6 +43,7 @@ echo 'runner ALL=(ALL) NOPASSWD:ALL' >/etc/sudoers.d/runner
 chmod 0440 /etc/sudoers.d/runner
 
 apt-get update
+apt-get dist-upgrade -y
 apt-get install -y --no-install-recommends \
   git curl ca-certificates jq build-essential sudo unzip
 echo 'APT::Get::Assume-Yes "true";' >/etc/apt/apt.conf.d/90assume-yes
