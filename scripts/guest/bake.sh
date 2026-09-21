@@ -75,6 +75,30 @@ systemctl enable docker
 docker buildx version
 docker compose version
 
+# Native build/runtime dependencies for Linux Tauri v2 and Playwright Chromium.
+# Package names below target the default Ubuntu 24.04 image (t64 transition).
+# Custom Ubuntu images retain the basic runner; their jobs install native deps.
+# See docs/linux-desktop-builds.md for the package contract and build commands.
+if [ "$VERSION_CODENAME" = noble ]; then
+  apt-get install -y --no-install-recommends \
+    pkg-config clang wget file \
+    libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+    libayatana-appindicator3-dev librsvg2-dev \
+    libvips-dev libatomic1 \
+    xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6 \
+    xfonts-cyrillic xfonts-scalable fonts-liberation fonts-ipafont-gothic \
+    fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf \
+    libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
+    libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 \
+    libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 \
+    libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
+
+  # Fail the bake before replacing the base if native build discovery is broken.
+  pkg-config --modversion webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1 \
+    librsvg-2.0 openssl vips
+  clang --version
+fi
+
 mkdir -p /opt/actions-runner
 curl -fsSL "$TARBALL_URL" -o /tmp/runner.tar.gz
 if [ -n "$TARBALL_SHA256" ]; then
