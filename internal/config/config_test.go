@@ -482,3 +482,84 @@ func TestIsolationValidationErrors(t *testing.T) {
 		})
 	}
 }
+
+const windowsPoolYAML = `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key_path: /tmp/key.pem
+pools:
+  - name: win
+    os: windows
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 4
+    memory_mb: 8192
+    disk_gb: 80
+    labels: [self-hosted, windows, x64]
+`
+
+func TestWindowsPoolDefaults(t *testing.T) {
+	c, err := Load(writeConfig(t, windowsPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pools[0].OS != "windows" || c.Pools[0].Backend != "qemu" {
+		t.Errorf("pool = %+v", c.Pools[0])
+	}
+	if c.Windows.ImageURL != DefaultWindowsImageURL {
+		t.Errorf("ImageURL = %q", c.Windows.ImageURL)
+	}
+	if c.Windows.VirtioWinURL != DefaultVirtioWinURL {
+		t.Errorf("VirtioWinURL = %q", c.Windows.VirtioWinURL)
+	}
+	if !c.HasQEMUOS("windows") || c.HasQEMUOS("linux") {
+		t.Error("HasQEMUOS wrong")
+	}
+}
+
+func TestLinuxPoolOSDefault(t *testing.T) {
+	c, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pools[0].OS != "linux" || !c.HasQEMUOS("linux") || c.HasQEMUOS("windows") {
+		t.Errorf("OS = %q", c.Pools[0].OS)
+	}
+}
+
+func TestWindowsPoolValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(string) string
+		wantErr string
+	}{
+		{"bad os", func(y string) string { return strings.Replace(y, "os: windows", "os: bsd", 1) }, `os must be "linux" or "windows"`},
+		{"docker backend", func(y string) string { return strings.Replace(y, "os: windows", "os: windows\n    backend: docker", 1) }, "os: windows requires backend: qemu"},
+		{"low memory", func(y string) string { return strings.Replace(y, "memory_mb: 8192", "memory_mb: 1024", 1) }, "memory_mb must be >= 2048"},
+		{"relative ovmf", func(y string) string { return y + "windows:\n  ovmf_dir: share/ovmf\n" }, "windows.ovmf_dir must be an absolute path"},
+		{"bad sha", func(y string) string { return y + "windows:\n  image_sha256: abc\n" }, "windows.image_sha256 must be 64 hex characters"},
+		{"bad virtio sha", func(y string) string { return y + "windows:\n  virtio_win_sha256: xyz\n" }, "windows.virtio_win_sha256 must be 64 hex characters"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.mutate(windowsPoolYAML)))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestWindowsBlockOverrides(t *testing.T) {
+	y := windowsPoolYAML + "windows:\n  image_url: https://example.com/w.vhdx\n  image_sha256: " +
+		strings.Repeat("a", 64) + "\n  ovmf_dir: /usr/share/edk2/x64\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.ImageURL != "https://example.com/w.vhdx" || c.Windows.OVMFDir != "/usr/share/edk2/x64" {
+		t.Errorf("Windows = %+v", c.Windows)
+	}
+}
