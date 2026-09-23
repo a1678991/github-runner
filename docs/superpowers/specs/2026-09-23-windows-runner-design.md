@@ -90,6 +90,7 @@ When `windows.ovmf_dir` is empty, the first existing directory wins:
 |---|---|---|
 | Arch | `/usr/share/edk2/x64` | `OVMF_CODE.4m.fd`, `OVMF_VARS.4m.fd` |
 | Debian/Ubuntu | `/usr/share/OVMF` | `OVMF_CODE_4M.fd`, `OVMF_VARS_4M.fd` |
+| Arch (older layout) | `/usr/share/edk2-ovmf/x64` | as above |
 | NixOS | set by the module from `pkgs.OVMF.fd` (`/share/edk2/x64` or `FV`) | |
 
 Within the directory, the code file is the first match of

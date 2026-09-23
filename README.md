@@ -152,9 +152,12 @@ image is baked from Microsoft's **Windows Server 2025 evaluation** VHDX
 (English, x64): `refresh-image` downloads it (11 GB, cached across bakes
 via ETag), boots it once under UEFI with an answer file that completes
 OOBE unattended, installs virtio drivers from the virtio-win ISO, Git for
-Windows, and the actions runner (win-x64) — each checksum-verified when
-upstream publishes a checksum, TLS-only otherwise — and flattens the
-result to `base-windows.qcow2`. Job VMs then clone it exactly like Linux
+Windows, and the actions runner (win-x64) — the Git installer and the
+runner zip are verified against the SHA-256 upstream publishes in its
+release notes; the VHDX and the driver ISO are TLS-only (with an
+https→http downgrade guard) unless you pin `windows.image_sha256` /
+`windows.virtio_win_sha256` — and flattens the result to
+`base-windows.qcow2`. Job VMs then clone it exactly like Linux
 pools: virtio-blk + virtio-net, the JIT config on a seed CD-ROM, one job,
 power off.
 
@@ -195,13 +198,13 @@ Host prerequisites on top of the Linux qemu backend: OVMF firmware
 `services.github-qemu-runner.windows.enable = true`). `setup` checks for
 it when a Windows pool is configured.
 
-Licensing, plainly: the evaluation edition runs for 180 days and is not a
-production licence. Each `refresh-image` starts from the pristine download,
-so enabling the weekly refresh timer (off by default — see "Scheduled image
-refresh") keeps clones inside the window; whether that use is acceptable is
-between you and Microsoft. Set `image_url` to a different VHDX (e.g. Server
-2022 eval, or your own generalised image with the same layout) to change the
-base.
+Licensing: the image is Microsoft's *evaluation* edition. It is time-limited
+(180 days for Server 2025) and is not a production licence — read Microsoft's
+evaluation terms and decide whether your use is covered before enabling a
+windows pool. Each `refresh-image` bakes a fresh installation from the
+pristine download rather than ageing one in place. Set `image_url` to a
+different VHDX (e.g. Server 2022 eval, or your own licensed and generalised
+image with the same layout) to change the base.
 
 ## Requirements
 

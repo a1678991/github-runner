@@ -155,7 +155,7 @@ try {
         # --- licence -----------------------------------------------------------
         try {
             & cscript.exe //nologo C:\Windows\System32\slmgr.vbs /ato | Out-Null
-            $lic = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" | Select-Object -First 1
+            $lic = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" | Select-Object -First 1  # well-known Windows SLID, not a secret
             Log "licence status=$($lic.LicenseStatus) grace=$($lic.GracePeriodRemaining)min"
         } catch { Log "licence activation skipped: $($_.Exception.Message)" }
 

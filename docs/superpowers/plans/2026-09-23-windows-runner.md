@@ -22,7 +22,7 @@
 - Seed volume label `GHQSEED`; bake sentinel `BAKE-OK`; failure sentinel `BAKE-FAILED`; answer file name `Unattend.xml` (not `Autounattend.xml`).
 - Images directory files: `windows-base.vhdx`, `windows-base.vhdx.meta`, `virtio-win.iso`, `bake-windows/`, `base-windows.qcow2`, `base-windows.json`.
 - Tests needing `qemu-img` or `genisoimage` skip when the binary is absent (existing pattern); CI installs both.
-- The pre-commit hook runs `nix fmt` on staged `.nix` files; `nix` is on this host.
+- The pre-commit hook runs `nix fmt` on staged `.nix` files, so `nix` must be on PATH.
 - **Deviation from spec, deliberate:** the spec lists a `NIC (virtio | e1000)` field on `qemu.Spec`. Nothing needs e1000 (virtio-net works from the first bake boot because the driver ISO is attached), so the field is not added. Everything else follows the spec.
 
 ---
