@@ -1,10 +1,10 @@
 # github-qemu-runner
 
-Ephemeral GitHub Actions self-hosted runners on Linux. Every job runs in a
-disposable QEMU/KVM virtual machine that is destroyed afterwards — the VM is
-the isolation boundary. A sandboxed Docker backend (gVisor by default, or a
-faster seccomp mode) is available as a fallback for hosts without `/dev/kvm`
-(see below). Linux sibling of
+Ephemeral GitHub Actions self-hosted runners on a Linux host. Every job runs
+in a disposable QEMU/KVM virtual machine — a Linux or a Windows guest — that
+is destroyed afterwards; the VM is the isolation boundary. A sandboxed
+Docker backend (gVisor by default, or a faster seccomp mode) is available as
+a fallback for hosts without `/dev/kvm` (see below). Linux sibling of
 [github-tart-runner](https://github.com/a1678991/github-tart-runner) (macOS).
 
 Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
@@ -20,6 +20,8 @@ Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
 - Optional [Docker backend](#docker-backend-hosts-without-devkvm) for hosts
   without KVM and for arm64, with per-pool `isolation: gvisor | seccomp`
   (seccomp = no sandbox overhead, for jobs that don't need Docker inside)
+- Optional [Windows pools](#windows-pools) on the qemu backend
+  (`os: windows`), baked from the Windows Server evaluation image
 - GitHub Enterprise Server support via `github.api_base_url`
 - Graceful drain on stop (busy runners get `drain_timeout` to finish);
   automatic crash recovery with orphan VM/record reaping on startup
@@ -172,6 +174,7 @@ windows:
   # image_url: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
   # image_sha256: ""          # verify when set; Microsoft publishes no checksum file
   # virtio_win_url: ...       # versioned https URL of the virtio-win ISO
+  # virtio_win_sha256: ""     # verify the virtio-win ISO when set
   # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
 ```
 
@@ -187,10 +190,11 @@ it when a Windows pool is configured.
 
 Licensing, plainly: the evaluation edition runs for 180 days and is not a
 production licence. Each `refresh-image` starts from the pristine download,
-so the weekly refresh timer keeps clones inside the window; whether that
-use is acceptable is between you and Microsoft. Set `image_url` to a
-different VHDX (e.g. Server 2022 eval, or your own generalised image with
-the same layout) to change the base.
+so enabling the weekly refresh timer (off by default — see "Scheduled image
+refresh") keeps clones inside the window; whether that use is acceptable is
+between you and Microsoft. Set `image_url` to a different VHDX (e.g. Server
+2022 eval, or your own generalised image with the same layout) to change the
+base.
 
 ## Requirements
 
@@ -243,10 +247,15 @@ pools:
 | Key | Required | Default | Notes |
 |---|---|---|---|
 | `state_dir` | no | `/var/lib/github-qemu-runner` | Base for the default `paths.*` directories; also holds anything outside the configurable paths |
-| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`. Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
+| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`; with a windows pool also `base-windows.qcow2`, `base-windows.json`, and the cached `windows-base.vhdx` (+ its `.meta` validator sidecar) and `virtio-win.iso` downloads. Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
 | `paths.run` | no | `<state_dir>/run` | Absolute path. Holds per-VM workdirs (QEMU) and jit-config mount staging (Docker). Same ownership caveat as `paths.images` |
 | `docker.runtime` | no | `runsc` | Runtime for docker-backend job containers: `runsc` (gVisor) or `runc` (no sandbox — read the Docker backend section first) |
 | `images.auto_refresh` | no | `true` | When the controller starts and a required image is missing, bake it instead of failing. Set `false` to restore fail-fast (`refresh-image` must be run manually first) |
+| `windows.image_url` | no | `https://go.microsoft.com/fwlink/?linkid=2345826` | Windows base image (Server 2025 evaluation VHDX) — see "Windows pools" |
+| `windows.image_sha256` | no | | Checksum-verifies the image download when set (unset: conditional ETag caching) |
+| `windows.virtio_win_url` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake |
+| `windows.virtio_win_sha256` | no | | Checksum-verifies the virtio-win ISO when set |
+| `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
 
 ### Pools
 
@@ -483,7 +492,7 @@ runners.
 | Per-VM console | `<paths.run>/<vm>/console.log` (gone after teardown); defaults to `/var/lib/github-qemu-runner/run/<vm>/console.log` |
 | Refresh base image | `sudo -u gh-runner github-qemu-runner refresh-image` (monthly, or after runner/Ubuntu releases; running VMs are unaffected, new VMs pick it up) |
 | Scheduled refresh | enable `github-qemu-runner-refresh.timer` (off by default; weekly) — see "Scheduled image refresh" |
-| Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
+| Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/base-windows.json` (windows), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
 | Stop (drains) | `systemctl stop github-qemu-runner` — idle runners are deregistered immediately; busy ones get `drain_timeout` (default 30 min) to finish |
 | Crash recovery | automatic: systemd restarts; startup reaping kills orphan VMs and deletes stale `ghq-*` runner records |
 
