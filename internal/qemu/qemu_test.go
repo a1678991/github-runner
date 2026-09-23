@@ -211,3 +211,42 @@ func TestCopyFile(t *testing.T) {
 		t.Errorf("mode = %o, want 0600", fi.Mode().Perm())
 	}
 }
+
+func TestImageFormat(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed")
+	}
+	dir := t.TempDir()
+	// Known extensions are mapped without running qemu-img.
+	for _, tc := range []struct{ name, want string }{
+		{"win.vhdx", "vhdx"},
+		{"win.VHDX", "vhdx"},
+		{"legacy.vhd", "vpc"},
+		{"base.qcow2", "qcow2"},
+		{"disk.img", "raw"},
+		{"disk.raw", "raw"},
+	} {
+		got, err := ImageFormat(context.Background(), filepath.Join(dir, tc.name))
+		if err != nil || got != tc.want {
+			t.Errorf("ImageFormat(%s) = %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+	// An unknown extension falls back to qemu-img info.
+	for _, tc := range []struct{ name, format, want string }{
+		{"image.bin", "qcow2", "qcow2"},
+		{"image.dat", "vhdx", "vhdx"},
+	} {
+		p := filepath.Join(dir, tc.name)
+		if out, err := exec.Command("qemu-img", "create", "-f", tc.format, p, "1M").CombinedOutput(); err != nil {
+			t.Fatalf("create %s: %v: %s", tc.format, err, out)
+		}
+		got, err := ImageFormat(context.Background(), p)
+		if err != nil || got != tc.want {
+			t.Errorf("ImageFormat(%s) = %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+	missing := filepath.Join(dir, "missing.bin")
+	if _, err := ImageFormat(context.Background(), missing); err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("err = %v, want one naming %s", err, missing)
+	}
+}

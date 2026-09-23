@@ -508,11 +508,11 @@ func TestWindowsPoolDefaults(t *testing.T) {
 	if c.Pools[0].OS != "windows" || c.Pools[0].Backend != "qemu" {
 		t.Errorf("pool = %+v", c.Pools[0])
 	}
-	if c.Windows.ImageURL != DefaultWindowsImageURL {
-		t.Errorf("ImageURL = %q", c.Windows.ImageURL)
+	if c.Windows.Image != DefaultWindowsImage {
+		t.Errorf("Image = %q", c.Windows.Image)
 	}
-	if c.Windows.VirtioWinURL != DefaultVirtioWinURL {
-		t.Errorf("VirtioWinURL = %q", c.Windows.VirtioWinURL)
+	if c.Windows.VirtioWin != DefaultVirtioWin {
+		t.Errorf("VirtioWin = %q", c.Windows.VirtioWin)
 	}
 	if !c.HasQEMUOS("windows") || c.HasQEMUOS("linux") {
 		t.Error("HasQEMUOS wrong")
@@ -541,6 +541,10 @@ func TestWindowsPoolValidation(t *testing.T) {
 		{"relative ovmf", func(y string) string { return y + "windows:\n  ovmf_dir: share/ovmf\n" }, "windows.ovmf_dir must be an absolute path"},
 		{"bad sha", func(y string) string { return y + "windows:\n  image_sha256: abc\n" }, "windows.image_sha256 must be 64 hex characters"},
 		{"bad virtio sha", func(y string) string { return y + "windows:\n  virtio_win_sha256: xyz\n" }, "windows.virtio_win_sha256 must be 64 hex characters"},
+		{"relative image", func(y string) string { return y + "windows:\n  image: srv/win.vhdx\n" }, "windows.image must be an http(s) URL or an absolute path"},
+		{"file:// image", func(y string) string { return y + "windows:\n  image: file:///srv/win.vhdx\n" }, "windows.image: use a plain absolute path, not a file:// URL"},
+		{"relative virtio", func(y string) string { return y + "windows:\n  virtio_win: virtio-win.iso\n" }, "windows.virtio_win must be an http(s) URL or an absolute path"},
+		{"file:// virtio", func(y string) string { return y + "windows:\n  virtio_win: file:///srv/virtio-win.iso\n" }, "windows.virtio_win: use a plain absolute path, not a file:// URL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -553,14 +557,109 @@ func TestWindowsPoolValidation(t *testing.T) {
 }
 
 func TestWindowsBlockOverrides(t *testing.T) {
-	y := windowsPoolYAML + "windows:\n  image_url: https://example.com/w.vhdx\n  image_sha256: " +
+	y := windowsPoolYAML + "windows:\n  image: https://example.com/w.vhdx\n  image_sha256: " +
 		strings.Repeat("a", 64) + "\n  ovmf_dir: /usr/share/edk2/x64\n"
 	c, err := Load(writeConfig(t, y))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Windows.ImageURL != "https://example.com/w.vhdx" || c.Windows.OVMFDir != "/usr/share/edk2/x64" {
+	if c.Windows.Image != "https://example.com/w.vhdx" || c.Windows.OVMFDir != "/usr/share/edk2/x64" {
 		t.Errorf("Windows = %+v", c.Windows)
+	}
+}
+
+// A local file is a first-class source for both keys: absolute paths are
+// accepted and kept verbatim (the bake uses them in place).
+func TestWindowsLocalSources(t *testing.T) {
+	y := windowsPoolYAML + "windows:\n  image: /srv/win.vhdx\n  virtio_win: /srv/virtio-win.iso\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.Image != "/srv/win.vhdx" || c.Windows.VirtioWin != "/srv/virtio-win.iso" {
+		t.Errorf("Windows = %+v", c.Windows)
+	}
+	if !IsLocalSource(c.Windows.Image) || !IsLocalSource(c.Windows.VirtioWin) {
+		t.Error("absolute paths must be local sources")
+	}
+}
+
+func TestWindowsSourcesExpandEnv(t *testing.T) {
+	t.Setenv("GHQ_TEST_IMAGES", "/srv/images")
+	y := windowsPoolYAML + "windows:\n  image: ${GHQ_TEST_IMAGES}/win.vhdx\n  virtio_win: ${GHQ_TEST_IMAGES}/virtio-win.iso\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.Image != "/srv/images/win.vhdx" || c.Windows.VirtioWin != "/srv/images/virtio-win.iso" {
+		t.Errorf("Windows = %+v", c.Windows)
+	}
+}
+
+func TestIsLocalSource(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"/srv/win.vhdx", true},
+		{"https://example.com/w.vhdx", false},
+		{"http://example.com/w.vhdx", false},
+		{"srv/win.vhdx", false},
+		{"", false},
+	} {
+		if got := IsLocalSource(tc.in); got != tc.want {
+			t.Errorf("IsLocalSource(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCheckLocalSource(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "win.vhdx")
+	if err := os.WriteFile(file, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := CheckLocalSource(file)
+	if err != nil || warning != "" {
+		t.Errorf("CheckLocalSource(file) = %q, %v", warning, err)
+	}
+	if _, err := CheckLocalSource(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("directory: err = %v, want not a regular file", err)
+	}
+	if _, err := CheckLocalSource(filepath.Join(dir, "missing.vhdx")); err == nil {
+		t.Error("missing file must be an error")
+	}
+	// ProtectHome=yes hides /home from the service; warn, don't fail:
+	// `setup` and the controller may well be able to read the file.
+	warning, err = CheckLocalSource("/home/nonexistent-user/win.vhdx")
+	if err == nil {
+		t.Skip("path under /home unexpectedly exists")
+	}
+	if warning != "" {
+		t.Errorf("warning = %q, want none when the stat fails", warning)
+	}
+}
+
+func TestCheckLocalSourceWarnsUnderHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || !strings.HasPrefix(home, "/home/") {
+		t.Skipf("home directory %q is not under /home: %v", home, err)
+	}
+	dir, err := os.MkdirTemp(home, "ghq-test-")
+	if err != nil {
+		t.Skipf("cannot create a directory under %s: %v", home, err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	file := filepath.Join(dir, "win.vhdx")
+	if err := os.WriteFile(file, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := CheckLocalSource(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warning, "ProtectHome=yes") {
+		t.Errorf("warning = %q, want a ProtectHome warning", warning)
 	}
 }
 

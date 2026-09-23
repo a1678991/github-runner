@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Firmware is a UEFI firmware pair. Vars must be a per-VM writable copy
@@ -152,6 +153,37 @@ func CreateOverlay(ctx context.Context, base, backingFormat, dest string, diskGB
 		return fmt.Errorf("qemu-img resize %s: %v: %s", dest, err, out)
 	}
 	return nil
+}
+
+// ImageFormat reports the qemu-img format name of a disk image, for use
+// as an overlay's backing format. The common extensions are mapped
+// directly (a 64 GiB VHDX takes a moment to probe, and a local image is
+// resolved on every bake); anything else is probed with `qemu-img info`.
+func ImageFormat(ctx context.Context, path string) (string, error) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".vhdx":
+		return "vhdx", nil
+	case ".vhd":
+		return "vpc", nil // qemu's name for the Virtual PC / VHD format
+	case ".qcow2":
+		return "qcow2", nil
+	case ".img", ".raw":
+		return "raw", nil
+	}
+	out, err := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", path).Output()
+	if err != nil {
+		return "", fmt.Errorf("qemu-img info %s: %w", path, err)
+	}
+	var info struct {
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return "", fmt.Errorf("parse qemu-img info for %s: %w", path, err)
+	}
+	if info.Format == "" {
+		return "", fmt.Errorf("qemu-img info %s: no format reported", path)
+	}
+	return info.Format, nil
 }
 
 // virtualSize reads a qcow2 image's virtual size in bytes.

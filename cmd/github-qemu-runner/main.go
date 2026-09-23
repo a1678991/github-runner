@@ -112,6 +112,21 @@ func runSetup(ctx context.Context, configPath string) error {
 			if err == nil {
 				fmt.Printf("ok    OVMF code %s\n", fw.Code)
 			}
+			// http(s) sources are checked by the bake itself; a local
+			// file must be there now, and readable by the service.
+			for _, s := range []struct{ what, val string }{
+				{"windows image", cfg.Windows.Image},
+				{"virtio-win ISO", cfg.Windows.VirtioWin},
+			} {
+				if !config.IsLocalSource(s.val) {
+					continue
+				}
+				warning, srcErr := config.CheckLocalSource(s.val)
+				check(s.what+" "+s.val, srcErr)
+				if warning != "" {
+					fmt.Printf("warn  %s\n", warning)
+				}
+			}
 		}
 	}
 

@@ -103,9 +103,9 @@ func Ensure(ctx context.Context, cfg *config.Config, log *slog.Logger, force boo
 		if err := imagebake.BakeWindows(ctx, imagebake.WindowsOptions{
 			ImageDir:        cfg.Paths.Images,
 			APIBase:         cfg.GitHub.APIBaseURL,
-			ImageURL:        cfg.Windows.ImageURL,
+			Image:           cfg.Windows.Image,
 			ImageSHA256:     cfg.Windows.ImageSHA256,
-			VirtioWinURL:    cfg.Windows.VirtioWinURL,
+			VirtioWin:       cfg.Windows.VirtioWin,
 			VirtioWinSHA256: cfg.Windows.VirtioWinSHA256,
 			OVMFCode:        fw.Code,
 			OVMFVars:        fw.Vars,

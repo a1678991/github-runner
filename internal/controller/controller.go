@@ -67,6 +67,23 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			// A local image source is only read by a bake, but fail (or
+			// warn) at startup rather than at the next auto-refresh.
+			for _, s := range []struct{ key, val string }{
+				{"windows.image", cfg.Windows.Image},
+				{"windows.virtio_win", cfg.Windows.VirtioWin},
+			} {
+				if !config.IsLocalSource(s.val) {
+					continue
+				}
+				warning, err := config.CheckLocalSource(s.val)
+				if err != nil {
+					return fmt.Errorf("%s: %w", s.key, err)
+				}
+				if warning != "" {
+					log.Warn(warning)
+				}
+			}
 			qemuProv.WindowsBasePath = winPath
 			qemuProv.Firmware = &qemu.Firmware{Code: fw.Code, Vars: fw.Vars}
 		}

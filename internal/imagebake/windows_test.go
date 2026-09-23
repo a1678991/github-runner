@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeQEMU writes sentinel to the file named by "-serial file:<path>"
@@ -89,14 +91,14 @@ func TestBakeWindows(t *testing.T) {
 	}
 	images := filepath.Join(dir, "images")
 	err := BakeWindows(context.Background(), WindowsOptions{
-		ImageDir:     images,
-		HTTP:         srv.Client(),
-		APIBase:      srv.URL,
-		ImageURL:     srv.URL + "/image.vhdx",
-		VirtioWinURL: srv.URL + "/virtio-win.iso",
-		OVMFCode:     filepath.Join(fw, "OVMF_CODE.fd"),
-		OVMFVars:     filepath.Join(fw, "OVMF_VARS.fd"),
-		QEMUBin:      fakeQEMU(t, dir, "BAKE-OK"),
+		ImageDir:  images,
+		HTTP:      srv.Client(),
+		APIBase:   srv.URL,
+		Image:     srv.URL + "/image.vhdx",
+		VirtioWin: srv.URL + "/virtio-win.iso",
+		OVMFCode:  filepath.Join(fw, "OVMF_CODE.fd"),
+		OVMFVars:  filepath.Join(fw, "OVMF_VARS.fd"),
+		QEMUBin:   fakeQEMU(t, dir, "BAKE-OK"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +119,8 @@ func TestBakeWindows(t *testing.T) {
 	if err := json.Unmarshal(mb, &meta); err != nil {
 		t.Fatal(err)
 	}
-	if meta["runner_version"] != "2.337.0" || meta["git_version"] != "2.55.0.windows.5" || meta["image_etag"] != `"img-1"` || meta["baked_at"] == "" {
+	if meta["runner_version"] != "2.337.0" || meta["git_version"] != "2.55.0.windows.5" ||
+		meta["image"] != srv.URL+"/image.vhdx" || meta["image_etag"] != `"img-1"` || meta["baked_at"] == "" {
 		t.Errorf("meta = %v", meta)
 	}
 	if _, err := os.Stat(filepath.Join(images, "bake-windows")); !os.IsNotExist(err) {
@@ -166,7 +169,7 @@ func TestBakeWindowsNoSentinel(t *testing.T) {
 	images := filepath.Join(dir, "images")
 	err := BakeWindows(context.Background(), WindowsOptions{
 		ImageDir: images, HTTP: srv.Client(), APIBase: srv.URL,
-		ImageURL: srv.URL + "/image.vhdx", VirtioWinURL: srv.URL + "/virtio-win.iso",
+		Image: srv.URL + "/image.vhdx", VirtioWin: srv.URL + "/virtio-win.iso",
 		OVMFCode: filepath.Join(dir, "OVMF_CODE.fd"), OVMFVars: filepath.Join(dir, "OVMF_VARS.fd"),
 		QEMUBin: fakeQEMU(t, dir, "BAKE-FAILED: boom"),
 	})
@@ -200,7 +203,7 @@ func TestBakeSeedContents(t *testing.T) {
 	}
 	err := BakeWindows(context.Background(), WindowsOptions{
 		ImageDir: filepath.Join(dir, "images"), HTTP: srv.Client(), APIBase: srv.URL,
-		ImageURL: srv.URL + "/image.vhdx", VirtioWinURL: srv.URL + "/virtio-win.iso",
+		Image: srv.URL + "/image.vhdx", VirtioWin: srv.URL + "/virtio-win.iso",
 		OVMFCode: filepath.Join(dir, "OVMF_CODE.fd"), OVMFVars: filepath.Join(dir, "OVMF_VARS.fd"),
 		QEMUBin: fake,
 	})
@@ -226,5 +229,134 @@ func TestBakeSeedContents(t *testing.T) {
 	}
 	if vars, _ := os.ReadFile(filepath.Join(keep, "vars.fd")); string(vars) != "OVMF_VARS.fd" {
 		t.Error("vars.fd must be a copy of the pristine OVMF_VARS")
+	}
+}
+
+// localSources creates a VHDX and a stand-in virtio-win ISO outside
+// ImageDir, plus the OVMF pair, and returns their paths.
+func localSources(t *testing.T, dir string) (vhdx, iso, ovmfCode, ovmfVars string) {
+	t.Helper()
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vhdx = filepath.Join(src, "my-windows.vhdx")
+	if out, err := exec.Command("qemu-img", "create", "-f", "vhdx", vhdx, "64M").CombinedOutput(); err != nil {
+		t.Fatalf("create vhdx: %v: %s", err, out)
+	}
+	iso = filepath.Join(src, "my-virtio-win.iso")
+	if err := os.WriteFile(iso, []byte("fake-iso"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"OVMF_CODE.fd", "OVMF_VARS.fd"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return vhdx, iso, filepath.Join(dir, "OVMF_CODE.fd"), filepath.Join(dir, "OVMF_VARS.fd")
+}
+
+// A local windows.image / windows.virtio_win is used where it lies: no
+// copy into ImageDir, no validator sidecar, and the provenance records
+// size+mtime instead of an ETag.
+func TestBakeWindowsLocalImage(t *testing.T) {
+	requireBakeTools(t)
+	srv := windowsBakeServer(t)
+	defer srv.Close()
+	dir := t.TempDir()
+	vhdx, iso, code, vars := localSources(t, dir)
+	images := filepath.Join(dir, "images")
+	err := BakeWindows(context.Background(), WindowsOptions{
+		ImageDir: images, HTTP: srv.Client(), APIBase: srv.URL,
+		Image: vhdx, VirtioWin: iso,
+		OVMFCode: code, OVMFVars: vars,
+		QEMUBin: fakeQEMU(t, dir, "BAKE-OK"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(images, "base-windows.qcow2")
+	info, err := exec.Command("qemu-img", "info", base).CombinedOutput()
+	if err != nil {
+		t.Fatalf("qemu-img info: %v: %s", err, info)
+	}
+	if strings.Contains(string(info), "backing file") {
+		t.Errorf("base must be flattened:\n%s", info)
+	}
+	for _, f := range []string{"windows-base.vhdx", "windows-base.vhdx.meta", "virtio-win.iso"} {
+		if _, err := os.Stat(filepath.Join(images, f)); !os.IsNotExist(err) {
+			t.Errorf("%s: local sources must not be copied into ImageDir (err = %v)", f, err)
+		}
+	}
+	mb, err := os.ReadFile(filepath.Join(images, "base-windows.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]string
+	if err := json.Unmarshal(mb, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["image"] != vhdx || meta["image_size"] == "" || meta["image_mtime"] == "" {
+		t.Errorf("meta = %v", meta)
+	}
+	if _, ok := meta["image_etag"]; ok {
+		t.Errorf("local source must not record an ETag: meta = %v", meta)
+	}
+	fi, err := os.Stat(vhdx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta["image_size"] != strconv.FormatInt(fi.Size(), 10) {
+		t.Errorf("image_size = %q, want %d", meta["image_size"], fi.Size())
+	}
+	if _, err := time.Parse(time.RFC3339, meta["image_mtime"]); err != nil {
+		t.Errorf("image_mtime = %q: %v", meta["image_mtime"], err)
+	}
+	// The bake VM reads the ISO from where it lies.
+	argvBytes, err := os.ReadFile(filepath.Join(dir, "argv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv := string(argvBytes); !strings.Contains(argv, "file="+iso+",if=none,id=cd0") {
+		t.Errorf("argv must reference the local ISO %s:\n%s", iso, argv)
+	}
+}
+
+func TestBakeWindowsLocalImageSHAMismatch(t *testing.T) {
+	requireBakeTools(t)
+	srv := windowsBakeServer(t)
+	defer srv.Close()
+	dir := t.TempDir()
+	vhdx, iso, code, vars := localSources(t, dir)
+	images := filepath.Join(dir, "images")
+	err := BakeWindows(context.Background(), WindowsOptions{
+		ImageDir: images, HTTP: srv.Client(), APIBase: srv.URL,
+		Image: vhdx, ImageSHA256: strings.Repeat("0", 64), VirtioWin: iso,
+		OVMFCode: code, OVMFVars: vars,
+		QEMUBin: fakeQEMU(t, dir, "BAKE-OK"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Errorf("err = %v, want a checksum mismatch", err)
+	}
+	if _, err := os.Stat(filepath.Join(images, "base-windows.qcow2")); !os.IsNotExist(err) {
+		t.Error("a mismatched local image must not publish a base image")
+	}
+}
+
+func TestBakeWindowsLocalImageMissing(t *testing.T) {
+	requireBakeTools(t)
+	srv := windowsBakeServer(t)
+	defer srv.Close()
+	dir := t.TempDir()
+	_, iso, code, vars := localSources(t, dir)
+	missing := filepath.Join(dir, "src", "absent.vhdx")
+	err := BakeWindows(context.Background(), WindowsOptions{
+		ImageDir: filepath.Join(dir, "images"), HTTP: srv.Client(), APIBase: srv.URL,
+		Image: missing, VirtioWin: iso,
+		OVMFCode: code, OVMFVars: vars,
+		QEMUBin: fakeQEMU(t, dir, "BAKE-OK"),
+	})
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("err = %v, want one naming %s", err, missing)
 	}
 }

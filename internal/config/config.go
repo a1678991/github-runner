@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	// DefaultWindowsImageURL is Microsoft's evaluation-center link for the
+	// DefaultWindowsImage is Microsoft's evaluation-center link for the
 	// Windows Server 2025 evaluation VHDX (English, x64). It redirects to
 	// a versioned file on software-static.download.prss.microsoft.com.
-	DefaultWindowsImageURL = "https://go.microsoft.com/fwlink/?linkid=2345826"
-	// DefaultVirtioWinURL pins a versioned https URL: the unversioned
+	DefaultWindowsImage = "https://go.microsoft.com/fwlink/?linkid=2345826"
+	// DefaultVirtioWin pins a versioned https URL: the unversioned
 	// stable-virtio alias redirects through plain http.
-	DefaultVirtioWinURL = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso"
+	DefaultVirtioWin = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso"
 )
 
 // Duration wraps time.Duration to accept "5m"-style YAML strings.
@@ -85,9 +85,12 @@ type Docker struct {
 
 // Windows configures the base image for os: windows pools.
 type Windows struct {
-	ImageURL        string `yaml:"image_url"`
+	// Image and VirtioWin each take an http(s) URL (downloaded and cached
+	// under Paths.Images) or an absolute path to a local file (used in
+	// place, never copied). See IsLocalSource.
+	Image           string `yaml:"image"`
 	ImageSHA256     string `yaml:"image_sha256"`
-	VirtioWinURL    string `yaml:"virtio_win_url"`
+	VirtioWin       string `yaml:"virtio_win"`
 	VirtioWinSHA256 string `yaml:"virtio_win_sha256"`
 	// OVMFDir holds OVMF_CODE*.fd and OVMF_VARS*.fd. Empty means
 	// auto-detect (see ResolveOVMF).
@@ -180,11 +183,15 @@ func (c *Config) applyDefaults() {
 	if c.Docker.Runtime == "" {
 		c.Docker.Runtime = "runsc"
 	}
-	if c.Windows.ImageURL == "" {
-		c.Windows.ImageURL = DefaultWindowsImageURL
+	// Expanded like OVMFDir, so a local image can be pointed at with
+	// ${STATE_DIRECTORY}/... or another unit-provided variable.
+	c.Windows.Image = os.ExpandEnv(c.Windows.Image)
+	c.Windows.VirtioWin = os.ExpandEnv(c.Windows.VirtioWin)
+	if c.Windows.Image == "" {
+		c.Windows.Image = DefaultWindowsImage
 	}
-	if c.Windows.VirtioWinURL == "" {
-		c.Windows.VirtioWinURL = DefaultVirtioWinURL
+	if c.Windows.VirtioWin == "" {
+		c.Windows.VirtioWin = DefaultVirtioWin
 	}
 	// Digests are compared against lowercase hex (hex.EncodeToString),
 	// but Microsoft publishes evaluation-media SHA256 digests in uppercase.
@@ -245,6 +252,14 @@ func (c *Config) validate() error {
 	} {
 		if s.val != "" && !sha256Re.MatchString(s.val) {
 			return fmt.Errorf("%s must be 64 hex characters", s.key)
+		}
+	}
+	for _, s := range []struct{ key, val string }{
+		{"windows.image", c.Windows.Image},
+		{"windows.virtio_win", c.Windows.VirtioWin},
+	} {
+		if err := validateSource(s.key, s.val); err != nil {
+			return err
 		}
 	}
 	seen := map[string]bool{}
