@@ -84,3 +84,27 @@ func DownloadConditional(ctx context.Context, client *http.Client, url, dest str
 	}
 	return false, nil
 }
+
+// maxRedirects mirrors the stdlib's default redirect limit, which
+// setting CheckRedirect otherwise replaces.
+const maxRedirects = 10
+
+// NoDowngradeRedirect is an http.Client.CheckRedirect that refuses a
+// redirect chain that starts on https and hops to a non-https URL. The
+// Windows evaluation VHDX has no published checksum, so TLS is the only
+// integrity guarantee the download has; a redirect to plain http would
+// silently drop it. Redirect hops that stay on https (Microsoft's
+// fwlink -> CDN chain) are allowed, as is a chain that started on plain
+// http to begin with.
+func NoDowngradeRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) == 0 {
+		return nil
+	}
+	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing https -> %s redirect to %s", req.URL.Scheme, req.URL.Redacted())
+	}
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	return nil
+}

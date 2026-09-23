@@ -38,7 +38,12 @@ type WindowsOptions struct {
 
 func (o *WindowsOptions) defaults() {
 	if o.HTTP == nil {
-		o.HTTP = &http.Client{Timeout: 60 * time.Minute} // 11 GB image
+		// Only the default client gets the downgrade guard; a
+		// caller-supplied HTTP client is used exactly as given.
+		o.HTTP = &http.Client{
+			Timeout:       60 * time.Minute, // 11 GB image
+			CheckRedirect: NoDowngradeRedirect,
+		}
 	}
 	if o.APIBase == "" {
 		o.APIBase = "https://api.github.com"
@@ -191,6 +196,9 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 	}
 
 	newBase := filepath.Join(o.ImageDir, WindowsBase+".new")
+	// Leave no ~12 GB .new debris behind when convert or rename fails;
+	// after a successful rename the path is gone and Remove is a no-op.
+	defer func() { _ = os.Remove(newBase) }()
 	if out, err := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", overlay, newBase).CombinedOutput(); err != nil {
 		return fmt.Errorf("qemu-img convert: %v: %s", err, out)
 	}
@@ -229,6 +237,9 @@ func (o *WindowsOptions) fetch(ctx context.Context, url, dest, sha, what string)
 	}
 	cached, err := DownloadConditional(ctx, o.HTTP, url, dest)
 	if err != nil {
+		if ctx.Err() != nil {
+			return err // a cancelled bake is not an upstream outage
+		}
 		if _, statErr := os.Stat(dest); statErr == nil {
 			o.Log.Warn("conditional download failed; using the cached file", "what", what, "err", err)
 			return nil

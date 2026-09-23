@@ -307,6 +307,9 @@ func Bake(ctx context.Context, o Options) error {
 	}
 
 	newBase := filepath.Join(imagesDir, "base.qcow2.new")
+	// Leave no .new debris behind when convert or rename fails; after a
+	// successful rename the path is gone and Remove is a no-op.
+	defer func() { _ = os.Remove(newBase) }()
 	if out, err := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2",
 		overlay, newBase).CombinedOutput(); err != nil {
 		return fmt.Errorf("qemu-img convert: %v: %s", err, out)
