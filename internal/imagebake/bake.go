@@ -73,7 +73,9 @@ func (o *Options) defaults() {
 	}
 }
 
-// Release identifies an actions/runner build for one linux arch.
+// Release identifies one downloadable release artifact: an
+// actions/runner build for a platform+arch, or the Git for Windows
+// installer. TarballURL is the asset URL whatever the extension.
 type Release struct {
 	Version    string
 	TarballURL string
@@ -159,37 +161,22 @@ func DownloadVerified(ctx context.Context, client *http.Client, url, dest, wantS
 }
 
 // LatestRunner resolves the newest actions/runner release for the given
-// arch ("x64" or "arm64"). The tarball SHA is scraped from the release
-// notes; if the notes format changes, SHA256 comes back empty and the
-// caller proceeds on TLS alone.
-func LatestRunner(ctx context.Context, client *http.Client, apiBase, arch string) (Release, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimRight(apiBase, "/")+"/repos/actions/runner/releases/latest", nil)
+// platform ("linux" or "win") and arch ("x64" or "arm64"). Linux assets
+// are tarballs, Windows assets are zips; TarballURL is the asset URL in
+// both cases. The SHA is scraped from the release notes; if the notes
+// format changes, SHA256 comes back empty and the caller proceeds on TLS
+// alone.
+func LatestRunner(ctx context.Context, client *http.Client, apiBase, platform, arch string) (Release, error) {
+	rel, err := fetchLatestRelease(ctx, client, apiBase, "actions/runner")
 	if err != nil {
-		return Release{}, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return Release{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return Release{}, fmt.Errorf("releases/latest: %s", resp.Status)
-	}
-	var rel struct {
-		TagName string `json:"tag_name"`
-		Body    string `json:"body"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return Release{}, err
 	}
 	version := strings.TrimPrefix(rel.TagName, "v")
-	want := fmt.Sprintf("actions-runner-linux-%s-%s.tar.gz", arch, version)
+	ext := "tar.gz"
+	if platform == "win" {
+		ext = "zip"
+	}
+	want := fmt.Sprintf("actions-runner-%s-%s-%s.%s", platform, arch, version, ext)
 	out := Release{Version: version}
 	for _, a := range rel.Assets {
 		if a.Name == want {
@@ -200,13 +187,12 @@ func LatestRunner(ctx context.Context, client *http.Client, apiBase, arch string
 	if out.TarballURL == "" {
 		return Release{}, fmt.Errorf("asset %s not found in release %s", want, rel.TagName)
 	}
-	// SHA comes from the "<!-- BEGIN SHA linux-<arch> -->" markers GitHub
-	// embeds in the release notes' checksum table; the asset name alone is
-	// ambiguous (it also appears in the install instructions, and the first
-	// hex token after that is a different platform's SHA). If the markers
-	// vanish in a future format change, SHA256 stays empty and the caller
-	// proceeds on TLS alone.
-	re := regexp.MustCompile(`<!-- BEGIN SHA linux-` + regexp.QuoteMeta(arch) + ` -->\s*([0-9a-fA-F]{64})\s*<!-- END SHA linux-` + regexp.QuoteMeta(arch) + ` -->`)
+	// SHA comes from the "<!-- BEGIN SHA <platform>-<arch> -->" markers
+	// GitHub embeds in the release notes' checksum table; the asset name
+	// alone is ambiguous (it also appears in the install instructions, and
+	// the first hex token after that is a different platform's SHA).
+	key := regexp.QuoteMeta(platform + "-" + arch)
+	re := regexp.MustCompile(`<!-- BEGIN SHA ` + key + ` -->\s*([0-9a-fA-F]{64})\s*<!-- END SHA ` + key + ` -->`)
 	if m := re.FindStringSubmatch(rel.Body); m != nil {
 		out.SHA256 = strings.ToLower(m[1])
 	}
@@ -265,7 +251,7 @@ func Bake(ctx context.Context, o Options) error {
 		return err
 	}
 
-	rel, err := LatestRunner(ctx, o.HTTP, o.APIBase, "x64")
+	rel, err := LatestRunner(ctx, o.HTTP, o.APIBase, "linux", "x64")
 	if err != nil {
 		return fmt.Errorf("resolve runner release: %w", err)
 	}

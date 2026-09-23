@@ -84,7 +84,7 @@ func TestLatestRunner(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "x64")
+	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "linux", "x64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestLatestRunnerArm64NoMarkers(t *testing.T) {
 		}`))
 	}))
 	defer srv.Close()
-	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "arm64")
+	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "linux", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestLatestRunnerSHAFromMarkers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	armRel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "arm64")
+	armRel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "linux", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,12 +166,34 @@ func TestLatestRunnerSHAFromMarkers(t *testing.T) {
 			armRel.SHA256, strings.Repeat("d", 64), strings.Repeat("b", 64))
 	}
 
-	x64Rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "x64")
+	x64Rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "linux", "x64")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if x64Rel.SHA256 != strings.Repeat("c", 64) {
 		t.Errorf("x64 SHA256 = %q, want %q", x64Rel.SHA256, strings.Repeat("c", 64))
+	}
+}
+
+func TestLatestRunnerWindows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v2.337.0",
+			"body": "- actions-runner-win-x64-2.337.0.zip <!-- BEGIN SHA win-x64 -->" + strings.Repeat("e", 64) + "<!-- END SHA win-x64 -->\n" +
+				"- actions-runner-linux-x64-2.337.0.tar.gz <!-- BEGIN SHA linux-x64 -->" + strings.Repeat("c", 64) + "<!-- END SHA linux-x64 -->\n",
+			"assets": []map[string]any{
+				{"name": "actions-runner-linux-x64-2.337.0.tar.gz", "browser_download_url": "https://x/linux.tar.gz"},
+				{"name": "actions-runner-win-x64-2.337.0.zip", "browser_download_url": "https://x/win.zip"},
+			},
+		})
+	}))
+	defer srv.Close()
+	rel, err := LatestRunner(context.Background(), srv.Client(), srv.URL, "win", "x64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.Version != "2.337.0" || rel.TarballURL != "https://x/win.zip" || rel.SHA256 != strings.Repeat("e", 64) {
+		t.Errorf("rel = %+v", rel)
 	}
 }
 
