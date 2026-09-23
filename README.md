@@ -143,11 +143,61 @@ github-qemu-runner`. Label docker pools with the real architecture (e.g.
 `arm64`), and as with the qemu backend: never attach runners to public
 repositories.
 
+## Windows pools
+
+`backend: qemu` pools can run Windows guests with `os: windows`. The base
+image is baked from Microsoft's **Windows Server 2025 evaluation** VHDX
+(English, x64): `refresh-image` downloads it (11 GB, cached across bakes
+via ETag), boots it once under UEFI with an answer file that completes
+OOBE unattended, installs virtio drivers from the virtio-win ISO, Git for
+Windows, and the actions runner (win-x64, checksum-verified), and flattens
+the result to `base-windows.qcow2`. Job VMs then clone it exactly like
+Linux pools: virtio-blk + virtio-net, the JIT config on a seed CD-ROM, one
+job, power off.
+
+```yaml
+pools:
+  - name: win
+    os: windows
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 4
+    memory_mb: 8192            # >= 2048 on windows pools
+    disk_gb: 80                # floor: the image's 64 GiB virtual size
+    labels: [self-hosted, windows, x64]
+
+# optional overrides; every key has a default
+windows:
+  # image_url: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
+  # image_sha256: ""          # verify when set; Microsoft publishes no checksum file
+  # virtio_win_url: ...       # versioned https URL of the virtio-win ISO
+  # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
+```
+
+Inside the guest, jobs run as the local administrator `runner` in an
+interactive session (parity with GitHub-hosted Windows runners), with
+`git` on the PATH, Windows Update disabled, and long paths enabled. There
+is no Docker inside Windows jobs.
+
+Host prerequisites on top of the Linux qemu backend: OVMF firmware
+(Arch: `pacman -S edk2-ovmf`; Debian/Ubuntu: `apt install ovmf`; NixOS:
+`services.github-qemu-runner.windows.enable = true`). `setup` checks for
+it when a Windows pool is configured.
+
+Licensing, plainly: the evaluation edition runs for 180 days and is not a
+production licence. Each `refresh-image` starts from the pristine download,
+so the weekly refresh timer keeps clones inside the window; whether that
+use is acceptable is between you and Microsoft. Set `image_url` to a
+different VHDX (e.g. Server 2022 eval, or your own generalised image with
+the same layout) to change the base.
+
 ## Requirements
 
 - Linux host with `/dev/kvm`, systemd
 - `qemu-system-x86_64`, `qemu-img`, `genisoimage` on PATH
   (Arch: `pacman -S qemu-base cdrtools`; Debian/Ubuntu: `apt install qemu-system-x86 qemu-utils genisoimage`)
+- OVMF firmware for windows pools (see "Windows pools")
 - A GitHub App with **Self-hosted runners: Read & write** (org) and/or
   **Administration: Read & write** (repo), installed on the target org/repos
 
@@ -207,6 +257,7 @@ at a time, forever. Labels may overlap across pools.
 |---|---|---|---|
 | `name` | yes | | Lowercase alphanumeric + hyphens, max 20 chars; feeds runner/VM names (`ghq-<pool>-<id>`) |
 | `backend` | no | `qemu` | `qemu` or `docker` |
+| `os` | no | `linux` | `linux` or `windows`; qemu backend only — see "Windows pools" |
 | `isolation` | no | `gvisor` | Docker pools only: `gvisor` (default) or `seccomp` |
 | `seccomp_profile` | no | | Seccomp pools only: optional absolute path to a custom seccomp profile |
 | `scope` | yes | | `org` or `repo` |
@@ -214,8 +265,8 @@ at a time, forever. Labels may overlap across pools.
 | `repo` | with `scope: repo` | | `owner/name` |
 | `count` | yes | | Concurrent slots, ≥ 1 |
 | `cpus` | yes | | vCPUs per VM, ≥ 1 |
-| `memory_mb` | yes | | RAM per VM, ≥ 256 |
-| `disk_gb` | yes | | Disk per VM, ≥ 10; advisory (not enforced) on docker pools |
+| `memory_mb` | yes | | RAM per VM, ≥ 256 (≥ 2048 on windows pools) |
+| `disk_gb` | yes | | Disk per VM, ≥ 10; advisory (not enforced) on docker pools. The base image's virtual size is the floor — 64 GiB on windows pools, so smaller values have no effect |
 | `labels` | yes | | At least one; runners are targeted by `runs-on` matching all labels |
 | `runner_group` | no | `Default` | Org-scoped pools only — see below |
 | `liveness_timeout` | no | `5m` | How long a freshly booted runner may take to show up online before the slot is torn down and recycled |
@@ -266,7 +317,7 @@ github-qemu-runner [-config PATH] <controller|refresh-image|setup>
 | Command | What it does |
 |---|---|
 | `setup` | Preflight: config parses, binaries on PATH, `/dev/kvm` (or docker + runsc) usable, App key parses and authenticates, base image present, capacity warnings. All lines `ok` → ready |
-| `refresh-image` | Bakes (or re-bakes) the base images for whichever backends the pools use. Run after install and then periodically |
+| `refresh-image` | Bakes (or re-bakes) the base images for whichever backends the pools use, including the Windows base when a windows pool exists. Run after install and then periodically |
 | `controller` | Runs the pools (the systemd service; also the default when no command is given) |
 
 ## Scheduled image refresh

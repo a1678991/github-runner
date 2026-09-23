@@ -46,6 +46,8 @@ in
       '';
     };
 
+    windows.enable = lib.mkEnableOption "Windows pools (adds OVMF firmware and sets windows.ovmf_dir)";
+
     refresh = {
       enable = lib.mkEnableOption "periodic image refresh via a systemd timer";
       schedule = lib.mkOption {
@@ -63,6 +65,10 @@ in
   config = lib.mkIf cfg.enable {
     services.github-qemu-runner.settings.github.private_key_path =
       lib.mkDefault "\${CREDENTIALS_DIRECTORY}/app-key.pem";
+
+    services.github-qemu-runner.settings.windows.ovmf_dir = lib.mkIf cfg.windows.enable (
+      lib.mkDefault "${pkgs.OVMF.fd}/FV"
+    );
 
     users.users.gh-runner = {
       isSystemUser = true;
