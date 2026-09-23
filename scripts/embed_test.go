@@ -83,4 +83,32 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 			t.Errorf("run-one-job.ps1 missing %q", want)
 		}
 	}
+	// Host-side teardown waits on the qemu process, so the power-off must be
+	// unconditional: the serial port is constructed inside the try whose
+	// finally runs Stop-Computer -Force, never before it.
+	for name, s := range map[string]string{"bake.ps1": WindowsBake, "run-one-job.ps1": WindowsRunOneJob} {
+		serial := strings.Index(s, "New-Object System.IO.Ports.SerialPort")
+		outerTry := strings.Index(s, "\ntry {\n")
+		stop := strings.Index(s, "Stop-Computer -Force")
+		if serial < 0 || outerTry < 0 || stop < 0 {
+			t.Errorf("%s: missing serial setup, top-level try, or Stop-Computer -Force", name)
+			continue
+		}
+		if outerTry > serial || stop < serial {
+			t.Errorf("%s: serial setup (offset %d) must sit inside the top-level try (offset %d) whose finally powers off (offset %d); outside it a COM1 failure skips the power-off and strands the VM", name, serial, outerTry, stop)
+		}
+	}
+	// A native command's stderr merged by 2>&1 arrives as ErrorRecords, which
+	// $ErrorActionPreference = 'Stop' escalates to a terminating
+	// NativeCommandError before any $LASTEXITCODE check can run.
+	for _, call := range []string{"pnputil.exe /add-driver", "& $gitExe --version"} {
+		i := strings.Index(WindowsBake, call)
+		if i < 0 {
+			t.Errorf("bake.ps1 missing %q", call)
+			continue
+		}
+		if j := strings.LastIndex(WindowsBake[:i], "$ErrorActionPreference = 'Continue'"); j < 0 || i-j > 300 {
+			t.Errorf("bake.ps1: %q must run with $ErrorActionPreference relaxed to 'Continue' so its exit code stays reachable", call)
+		}
+	}
 }
