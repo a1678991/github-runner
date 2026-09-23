@@ -563,3 +563,22 @@ func TestWindowsBlockOverrides(t *testing.T) {
 		t.Errorf("Windows = %+v", c.Windows)
 	}
 }
+
+func TestWindowsSHA256Lowercased(t *testing.T) {
+	// Microsoft publishes evaluation-media digests in uppercase; the
+	// verifier compares against lowercase hex, so Load must fold case.
+	upper := strings.Repeat("DEADBEEF", 8)
+	mixed := strings.Repeat("cAfE", 16)
+	y := windowsPoolYAML + "windows:\n  image_sha256: " + upper +
+		"\n  virtio_win_sha256: " + mixed + "\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.ImageSHA256 != strings.ToLower(upper) {
+		t.Errorf("ImageSHA256 = %q, want %q", c.Windows.ImageSHA256, strings.ToLower(upper))
+	}
+	if c.Windows.VirtioWinSHA256 != strings.ToLower(mixed) {
+		t.Errorf("VirtioWinSHA256 = %q, want %q", c.Windows.VirtioWinSHA256, strings.ToLower(mixed))
+	}
+}

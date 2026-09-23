@@ -186,6 +186,10 @@ func (c *Config) applyDefaults() {
 	if c.Windows.VirtioWinURL == "" {
 		c.Windows.VirtioWinURL = DefaultVirtioWinURL
 	}
+	// Digests are compared against lowercase hex (hex.EncodeToString),
+	// but Microsoft publishes evaluation-media SHA256 digests in uppercase.
+	c.Windows.ImageSHA256 = strings.ToLower(c.Windows.ImageSHA256)
+	c.Windows.VirtioWinSHA256 = strings.ToLower(c.Windows.VirtioWinSHA256)
 	c.Windows.OVMFDir = os.ExpandEnv(c.Windows.OVMFDir)
 	for i := range c.Pools {
 		p := &c.Pools[i]
