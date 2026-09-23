@@ -175,12 +175,19 @@ pools:
 
 # optional overrides; every key has a default
 windows:
-  # image_url: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
+  # image: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX;
+  #                           # an absolute path to a local image works too
   # image_sha256: ""          # verify when set; Microsoft publishes no checksum file
-  # virtio_win_url: ...       # versioned https URL of the virtio-win ISO
+  # virtio_win: ...           # versioned https URL of the virtio-win ISO, or an absolute path
   # virtio_win_sha256: ""     # verify the virtio-win ISO when set
   # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
 ```
+
+`windows.image` and `windows.virtio_win` each take an http(s) URL — then
+the file is downloaded into `paths.images` and cached across bakes — or an
+absolute path to a file already on the host, which the bake reads where it
+lies and never copies. `setup` and the controller check that a local path
+exists and is a regular file before anything else runs.
 
 Inside the guest, jobs run as the local administrator `runner` in an
 interactive session (parity with GitHub-hosted Windows runners), with
@@ -191,7 +198,10 @@ Disk footprint in `paths.images`: about 24 GB steady state per windows base
 (11 GB cached VHDX + 0.9 GB virtio-win ISO + ~12 GB baked
 `base-windows.qcow2`), peaking near 40 GB during a bake, when the overlay and
 the `base-windows.qcow2.new` being converted coexist with the previous base.
-Budget 40 GB on top of the Linux images.
+Budget 40 GB on top of the Linux images. Local `windows.image` /
+`windows.virtio_win` files are not copied there, so with both pointing at
+local paths only the baked image counts: roughly 12 GB steady state and
+24 GB during a bake.
 
 Host prerequisites on top of the Linux qemu backend: OVMF firmware
 (Arch: `pacman -S edk2-ovmf`; Debian/Ubuntu: `apt install ovmf`; NixOS:
@@ -202,9 +212,35 @@ Licensing: the image is Microsoft's *evaluation* edition. It is time-limited
 (180 days for Server 2025) and is not a production licence — read Microsoft's
 evaluation terms and decide whether your use is covered before enabling a
 windows pool. Each `refresh-image` bakes a fresh installation from the
-pristine download rather than ageing one in place. Set `image_url` to a
+pristine download rather than ageing one in place. Set `image` to a
 different VHDX (e.g. Server 2022 eval, or your own licensed and generalised
 image with the same layout) to change the base.
+
+### Custom images
+
+`windows.image` accepts any UEFI/GPT disk image `qemu-img` can use as a
+backing file — VHDX, qcow2 or raw — whether downloaded or already on the
+host. The image must be **generalised** (sysprepped, OOBE pending): the
+bake boots it with the seed CD's `Unattend.xml`, which completes setup
+unattended and runs `bake.ps1` (virtio drivers, Git, the runner). An image
+captured mid-session, or one that has already been through OOBE, never
+reaches the sentinel and the bake fails.
+
+A local path must be readable by the service user and **outside `/home`**:
+both systemd units run with `ProtectHome=yes`, so the service sees an empty
+`/home` even when the operator can read the file. `setup` warns about such
+a path instead of failing, since it runs as you. Local files are used in
+place, so `paths.images` holds only the baked `base-windows.qcow2`; pin
+`windows.image_sha256` if you want the file verified on every bake.
+
+The backing format follows the file: `.vhdx` → `vhdx`, `.vhd` → `vpc`,
+`.qcow2` → `qcow2`, `.img`/`.raw` → `raw`, anything else is probed with
+`qemu-img info`. An http(s) source is always treated as a VHDX. Name the
+file for what it contains — a qcow2 called `disk.img` would be handed to
+`qemu-img` as raw.
+
+Supplying your own licensed image also removes the evaluation-edition
+caveats above: nothing is time-limited and no evaluation terms apply.
 
 ## Requirements
 
@@ -257,13 +293,13 @@ pools:
 | Key | Required | Default | Notes |
 |---|---|---|---|
 | `state_dir` | no | `/var/lib/github-qemu-runner` | Base for the default `paths.*` directories; also holds anything outside the configurable paths |
-| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`; with a windows pool also `base-windows.qcow2`, `base-windows.json`, and the cached `windows-base.vhdx` (+ its `.meta` validator sidecar) and `virtio-win.iso` downloads. Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
+| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`; with a windows pool also `base-windows.qcow2`, `base-windows.json`, and the cached `windows-base.vhdx` (+ its `.meta` validator sidecar) and `virtio-win.iso` downloads (only for http(s) sources — a local `windows.image`/`windows.virtio_win` is read where it lies). Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
 | `paths.run` | no | `<state_dir>/run` | Absolute path. Holds per-VM workdirs (QEMU) and jit-config mount staging (Docker). Same ownership caveat as `paths.images` |
 | `docker.runtime` | no | `runsc` | Runtime for docker-backend job containers: `runsc` (gVisor) or `runc` (no sandbox — read the Docker backend section first) |
 | `images.auto_refresh` | no | `true` | When the controller starts and a required image is missing, bake it instead of failing. Set `false` to restore fail-fast (`refresh-image` must be run manually first) |
-| `windows.image_url` | no | `https://go.microsoft.com/fwlink/?linkid=2345826` | Windows base image (Server 2025 evaluation VHDX) — see "Windows pools" |
-| `windows.image_sha256` | no | | Checksum-verifies the image download when set (unset: conditional ETag caching) |
-| `windows.virtio_win_url` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake |
+| `windows.image` | no | `https://go.microsoft.com/fwlink/?linkid=2345826` | Windows base image (Server 2025 evaluation VHDX). http(s) URL or absolute path; local files are used in place, never copied — see "Windows pools" |
+| `windows.image_sha256` | no | | Checksum-verifies the image when set (an http(s) source without it falls back to conditional ETag caching; a local one is then used unverified) |
+| `windows.virtio_win` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake. http(s) URL or absolute path; local files are used in place, never copied |
 | `windows.virtio_win_sha256` | no | | Checksum-verifies the virtio-win ISO when set |
 | `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
 

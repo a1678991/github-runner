@@ -349,3 +349,45 @@ Microsoft's documentation.
 - The `stable-virtio` alias on fedorapeople.org redirects to
   `http://` before landing on the versioned ISO; the default URL pins
   the versioned https path.
+
+## Amendment 2026-09-24 — `windows.image` / `windows.virtio_win`
+
+The two source keys above were renamed before the branch merged and now
+accept a local file as well as a URL. Everything else in this spec stands;
+`image_url` / `virtio_win_url` never shipped.
+
+- `windows.image_url` → **`windows.image`**, `windows.virtio_win_url` →
+  **`windows.virtio_win`** (constants `DefaultWindowsImage` /
+  `DefaultVirtioWin`; the values are unchanged). Both are passed through
+  `os.ExpandEnv` like `windows.ovmf_dir`.
+- Each value is either an `http(s)://` URL — downloaded and cached under
+  `paths.images` exactly as before — or an **absolute path** to a file on
+  the host. Anything else is rejected at load: a relative path with
+  `windows.image must be an http(s) URL or an absolute path`, a `file://`
+  URL with `windows.image: use a plain absolute path, not a file:// URL`.
+  `config.IsLocalSource` (true when the value is absolute) is the single
+  definition the bake, the controller and `setup` share.
+- A local file is used **in place** and never copied into `paths.images`:
+  no `windows-base.vhdx`, no `.meta` validator sidecar, no
+  `virtio-win.iso`. It must exist and be a regular file; when the matching
+  `*_sha256` is set it is hashed on every bake and a mismatch fails the
+  bake.
+- The bake's `fetch` helper became `WindowsOptions.resolveSource`, which
+  returns the path to use for either kind of source; the http(s) path
+  keeps the checksum-verified / conditional-GET behaviour including the
+  cached-file fallback on an upstream failure.
+- The overlay's backing format follows a local file instead of assuming
+  `vhdx`: `qemu.ImageFormat` maps `.vhdx`→`vhdx`, `.vhd`→`vpc`,
+  `.qcow2`→`qcow2`, `.img`/`.raw`→`raw`, and otherwise reads `format`
+  from `qemu-img info --output=json`. An http(s) source stays `vhdx`.
+- `base-windows.json` records `image` (the configured value) in place of
+  `image_url`. For an http(s) source it still records `image_etag`; for a
+  local one it records `image_size` (decimal bytes) and `image_mtime`
+  (RFC3339) instead, which is what a later reader can compare.
+- `config.CheckLocalSource(path) (warning, err)` is the shared preflight:
+  it errors when the file is missing or not regular, and returns a warning
+  for a path under `/home`, which the units cannot read with
+  `ProtectHome=yes`. The controller runs it for each local source at
+  startup (warning at WARN, error fatal); `setup` prints
+  `ok    windows image <path>` / `ok    virtio-win ISO <path>` and
+  `warn  <warning>`.

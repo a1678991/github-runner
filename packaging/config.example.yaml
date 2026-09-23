@@ -32,10 +32,14 @@ github:
 # Windows pools (os: windows on qemu pools) boot a baked copy of the
 # Windows Server evaluation image. All keys optional; see "Windows pools"
 # in the README for host prerequisites (OVMF) and licensing notes.
+# image and virtio_win each take an http(s) URL (downloaded and cached
+# under paths.images) or an absolute path to a file on this host, which is
+# used in place and never copied — it must be readable by the service user
+# and outside /home (the units run with ProtectHome=yes).
 #windows:
-#  image_url: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
-#  image_sha256: ""          # verify the download when set (Microsoft publishes no checksum)
-#  virtio_win_url: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso
+#  image: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
+#  image_sha256: ""          # verify the image when set (Microsoft publishes no checksum)
+#  virtio_win: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso
 #  virtio_win_sha256: ""
 #  ovmf_dir: /usr/share/edk2/x64   # auto-detected when unset
 
