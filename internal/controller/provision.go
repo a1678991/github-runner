@@ -34,7 +34,7 @@ func (q *QEMUProvisioner) Provision(ctx context.Context, name string, p config.P
 	}
 
 	overlay := filepath.Join(dir, "overlay.qcow2")
-	if err := qemu.CreateOverlay(ctx, q.BasePath, overlay, p.DiskGB); err != nil {
+	if err := qemu.CreateOverlay(ctx, q.BasePath, "qcow2", overlay, p.DiskGB); err != nil {
 		return fail(err)
 	}
 	ud, err := seed.UserData(jitConfig)

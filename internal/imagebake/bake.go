@@ -279,7 +279,7 @@ func Bake(ctx context.Context, o Options) error {
 		return err
 	}
 	overlay := filepath.Join(bakeDir, "bake-overlay.qcow2")
-	if err := qemu.CreateOverlay(ctx, absCloudImg, overlay, 20); err != nil {
+	if err := qemu.CreateOverlay(ctx, absCloudImg, "qcow2", overlay, 20); err != nil {
 		return err
 	}
 
