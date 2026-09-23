@@ -1,6 +1,8 @@
 // Package qemu creates copy-on-write disks and supervises
 // qemu-system-x86_64 child processes. One VM = one process; guest poweroff
-// (with -no-reboot) makes the process exit, which is the job-done signal.
+// makes the process exit, which is the job-done signal. Unless Spec.AllowReboot
+// is set, -no-reboot is passed so a guest reboot also ends the process: job VMs
+// rely on that, while the Windows bake allows reboots (OOBE needs them).
 package qemu
 
 import (

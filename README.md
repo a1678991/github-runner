@@ -152,10 +152,11 @@ image is baked from Microsoft's **Windows Server 2025 evaluation** VHDX
 (English, x64): `refresh-image` downloads it (11 GB, cached across bakes
 via ETag), boots it once under UEFI with an answer file that completes
 OOBE unattended, installs virtio drivers from the virtio-win ISO, Git for
-Windows, and the actions runner (win-x64, checksum-verified), and flattens
-the result to `base-windows.qcow2`. Job VMs then clone it exactly like
-Linux pools: virtio-blk + virtio-net, the JIT config on a seed CD-ROM, one
-job, power off.
+Windows, and the actions runner (win-x64) — each checksum-verified when
+upstream publishes a checksum, TLS-only otherwise — and flattens the
+result to `base-windows.qcow2`. Job VMs then clone it exactly like Linux
+pools: virtio-blk + virtio-net, the JIT config on a seed CD-ROM, one job,
+power off.
 
 ```yaml
 pools:
@@ -182,6 +183,12 @@ Inside the guest, jobs run as the local administrator `runner` in an
 interactive session (parity with GitHub-hosted Windows runners), with
 `git` on the PATH, Windows Update disabled, and long paths enabled. There
 is no Docker inside Windows jobs.
+
+Disk footprint in `paths.images`: about 24 GB steady state per windows base
+(11 GB cached VHDX + 0.9 GB virtio-win ISO + ~12 GB baked
+`base-windows.qcow2`), peaking near 40 GB during a bake, when the overlay and
+the `base-windows.qcow2.new` being converted coexist with the previous base.
+Budget 40 GB on top of the Linux images.
 
 Host prerequisites on top of the Linux qemu backend: OVMF firmware
 (Arch: `pacman -S edk2-ovmf`; Debian/Ubuntu: `apt install ovmf`; NixOS:
@@ -498,9 +505,11 @@ runners.
 
 ## Security notes
 
-- The VM is the isolation boundary; the guest `runner` user has no sudo
-  (Docker group membership is the same documented trade-off as
-  GitHub-hosted runners).
+- The VM is the isolation boundary; on Linux pools the guest `runner` user
+  has no sudo (Docker group membership is the same documented trade-off as
+  GitHub-hosted runners). On **windows** pools `runner` *is* a local
+  Administrator, matching GitHub-hosted Windows runners — so in-guest
+  privilege separation buys nothing there and the VM is the only boundary.
 - Outbound-only user-mode networking; nothing can connect into a guest.
 - JIT configs are single-use and bound to one pre-created runner record;
   they exist on disk only inside a per-VM seed ISO (0600) that is deleted
