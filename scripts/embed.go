@@ -1,5 +1,6 @@
-// Package scripts embeds the guest-side shell scripts. They are kept as
-// real .sh files so shellcheck/shfmt/lefthook cover them.
+// Package scripts embeds the guest-side shell and PowerShell scripts.
+// They are kept as real .sh/.ps1 files so they stay editable as scripts;
+// lefthook runs shellcheck/shfmt over the .sh ones.
 package scripts
 
 import _ "embed"
@@ -18,3 +19,12 @@ var DockerEntrypoint string
 
 //go:embed docker/entrypoint-slim.sh
 var DockerEntrypointSlim string
+
+//go:embed guest/windows/Unattend.xml
+var WindowsUnattend string
+
+//go:embed guest/windows/bake.ps1
+var WindowsBake string
+
+//go:embed guest/windows/run-one-job.ps1
+var WindowsRunOneJob string

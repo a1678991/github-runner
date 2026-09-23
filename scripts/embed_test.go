@@ -58,3 +58,29 @@ func TestDockerAssetsEmbedded(t *testing.T) {
 		t.Error("slim entrypoint must not start dockerd (seccomp pools run without --privileged; DinD is gvisor-pool-only)")
 	}
 }
+
+func TestWindowsAssetsEmbedded(t *testing.T) {
+	for name, s := range map[string]string{"Unattend": WindowsUnattend, "Bake": WindowsBake, "RunOneJob": WindowsRunOneJob} {
+		if strings.TrimSpace(s) == "" {
+			t.Errorf("%s is empty", name)
+		}
+		if strings.Contains(s, "\r\n") {
+			t.Errorf("%s has CRLF line endings; keep LF (PowerShell 5.1 and Setup accept LF)", name)
+		}
+	}
+	for _, want := range []string{"{{.AdminPassword}}", `pass="specialize"`, `pass="oobeSystem"`, "<HideEULAPage>true</HideEULAPage>", "GHQSEED", "bake.ps1"} {
+		if !strings.Contains(WindowsUnattend, want) {
+			t.Errorf("Unattend.xml missing %q", want)
+		}
+	}
+	for _, want := range []string{"BAKE-OK", "BAKE-FAILED", "pnputil", "viostor", "DisablePrivacyExperience", "wuauserv", "ghq-run-one-job", "bake-env.json", "Stop-Computer -Force", "RealTimeIsUniversal"} {
+		if !strings.Contains(WindowsBake, want) {
+			t.Errorf("bake.ps1 missing %q", want)
+		}
+	}
+	for _, want := range []string{"runner-jit.conf", "--jitconfig", "Resize-Partition", "Stop-Computer -Force", "GHQSEED"} {
+		if !strings.Contains(WindowsRunOneJob, want) {
+			t.Errorf("run-one-job.ps1 missing %q", want)
+		}
+	}
+}
