@@ -123,7 +123,10 @@ in
         SupplementaryGroups = [ "kvm" ];
         # No LoadCredential: the bake needs no GitHub App auth.
         ExecStart = "${lib.getExe cfg.package} -config ${configFile} refresh-image";
-        TimeoutStartSec = "30min";
+        # 3h, not systemd's 90s default: the Linux bake runs first, then a
+        # windows pool adds an 11 GB evaluation-VHDX download, a bake VM with
+        # its own 30-minute timeout, and a qemu-img convert of a 64 GiB image.
+        TimeoutStartSec = "3h";
         NoNewPrivileges = true;
         ProtectSystem = "strict";
         ProtectHome = true;
