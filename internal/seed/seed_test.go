@@ -80,6 +80,13 @@ func TestBuildISO(t *testing.T) {
 			t.Errorf("%s: %v", f, err)
 		}
 	}
+	// cloud-init only picks up a NoCloud seed whose volume id is cidata.
+	if _, err := exec.LookPath("isoinfo"); err == nil {
+		out, err := exec.Command("isoinfo", "-d", "-i", iso).CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "Volume id: cidata") {
+			t.Errorf("volume id: %v\n%s", err, out)
+		}
+	}
 }
 
 func TestBuildISOFiles(t *testing.T) {
