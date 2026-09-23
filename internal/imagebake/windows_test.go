@@ -13,11 +13,14 @@ import (
 )
 
 // fakeQEMU writes sentinel to the file named by "-serial file:<path>"
-// and exits, standing in for the bake VM.
+// and exits, standing in for the bake VM. It also dumps its argv (one
+// argument per line) to <dir>/argv so tests can assert the VM topology;
+// dir is the test's own directory, not the bake dir BakeWindows deletes.
 func fakeQEMU(t *testing.T, dir, sentinel string) string {
 	t.Helper()
 	p := filepath.Join(dir, "fake-qemu")
-	script := "#!/bin/sh\nprev=\nfor a in \"$@\"; do\n" +
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + filepath.Join(dir, "argv") + "\"\n" +
+		"prev=\nfor a in \"$@\"; do\n" +
 		"  if [ \"$prev\" = -serial ]; then echo '" + sentinel + "' > \"${a#file:}\"; fi\n" +
 		"  prev=$a\ndone\nexit 0\n"
 	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
@@ -124,6 +127,29 @@ func TestBakeWindows(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(images, f)); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
+	}
+
+	// The bake VM's argv: the disk/CD topology Windows needs before
+	// viostor exists, OVMF, Hyper-V enlightenments, and reboots allowed.
+	argvBytes, err := os.ReadFile(filepath.Join(dir, "argv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := string(argvBytes)
+	for _, want := range []string{
+		"ide-hd,drive=boot,bus=ide.0,bootindex=0", // VHDX boots from SATA
+		"virtio-blk-pci,drive=extra0",             // dummy disk binds viostor
+		"ide-cd,drive=cd0,bus=ide.2",              // virtio-win ISO
+		"ide-cd,drive=seed,bus=ide.1",             // Unattend.xml CD
+		"if=pflash,format=raw,readonly=on,file=" + filepath.Join(fw, "OVMF_CODE.fd"),
+		"hv_relaxed", // Hyper-V enlightenments
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv missing %q:\n%s", want, argv)
+		}
+	}
+	if strings.Contains(argv, "-no-reboot") {
+		t.Errorf("bake VM must allow reboots (OOBE reboots):\n%s", argv)
 	}
 }
 
