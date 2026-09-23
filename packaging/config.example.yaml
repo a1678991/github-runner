@@ -35,7 +35,8 @@ github:
 # image and virtio_win each take an http(s) URL (downloaded and cached
 # under paths.images) or an absolute path to a file on this host, which is
 # used in place and never copied — it must be readable by the service user
-# and outside /home (the units run with ProtectHome=yes).
+# and outside the trees the units replace: /home, /root, /run/user
+# (ProtectHome=yes) and /tmp, /var/tmp (PrivateTmp=yes).
 #windows:
 #  image: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
 #  image_sha256: ""          # verify the image when set (Microsoft publishes no checksum)

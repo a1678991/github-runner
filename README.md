@@ -186,8 +186,9 @@ windows:
 `windows.image` and `windows.virtio_win` each take an http(s) URL — then
 the file is downloaded into `paths.images` and cached across bakes — or an
 absolute path to a file already on the host, which the bake reads where it
-lies and never copies. `setup` and the controller check that a local path
-exists and is a regular file before anything else runs.
+lies and never copies. `setup` reports whether a local path exists and is a
+regular file, and the controller checks the same at startup; a bake
+triggered by `images.auto_refresh` validates it again itself.
 
 Inside the guest, jobs run as the local administrator `runner` in an
 interactive session (parity with GitHub-hosted Windows runners), with
@@ -218,20 +219,24 @@ image with the same layout) to change the base.
 
 ### Custom images
 
-`windows.image` accepts any UEFI/GPT disk image `qemu-img` can use as a
-backing file — VHDX, qcow2 or raw — whether downloaded or already on the
-host. The image must be **generalised** (sysprepped, OOBE pending): the
+A local `windows.image` may be any UEFI/GPT disk image `qemu-img` can use
+as a backing file — VHDX, qcow2 or raw; an http(s) source is downloaded and
+used as a VHDX, so a differently formatted image has to be fetched to the
+host first. Either way the image must be **generalised** (sysprepped, OOBE
+pending): the
 bake boots it with the seed CD's `Unattend.xml`, which completes setup
 unattended and runs `bake.ps1` (virtio drivers, Git, the runner). An image
 captured mid-session, or one that has already been through OOBE, never
 reaches the sentinel and the bake fails.
 
-A local path must be readable by the service user and **outside `/home`**:
-both systemd units run with `ProtectHome=yes`, so the service sees an empty
-`/home` even when the operator can read the file. `setup` warns about such
-a path instead of failing, since it runs as you. Local files are used in
-place, so `paths.images` holds only the baked `base-windows.qcow2`; pin
-`windows.image_sha256` if you want the file verified on every bake.
+A local path must be readable by the service user and outside the trees the
+units replace: `/home`, `/root` and `/run/user` (`ProtectHome=yes`) and
+`/tmp`, `/var/tmp` (`PrivateTmp=yes`). The service sees those empty even
+when the operator can read the file, so put the image somewhere like
+`/srv` or `/var/lib`. `setup` warns about such a path instead of failing,
+since it runs as you. Local files are used in place, so `paths.images`
+holds only the baked `base-windows.qcow2`; pin `windows.image_sha256` if
+you want the file verified on every bake.
 
 The backing format follows the file: `.vhdx` → `vhdx`, `.vhd` → `vpc`,
 `.qcow2` → `qcow2`, `.img`/`.raw` → `raw`, anything else is probed with

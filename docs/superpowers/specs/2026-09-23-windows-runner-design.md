@@ -386,8 +386,9 @@ accept a local file as well as a URL. Everything else in this spec stands;
   (RFC3339) instead, which is what a later reader can compare.
 - `config.CheckLocalSource(path) (warning, err)` is the shared preflight:
   it errors when the file is missing or not regular, and returns a warning
-  for a path under `/home`, which the units cannot read with
-  `ProtectHome=yes`. The controller runs it for each local source at
-  startup (warning at WARN, error fatal); `setup` prints
+  for a path in a tree the units replace — `/home`, `/root`, `/run/user`
+  (`ProtectHome=yes`) and `/tmp`, `/var/tmp` (`PrivateTmp=yes`); the
+  path is `filepath.Clean`ed before the prefix test. The controller runs
+  it for each local source at startup (warning at WARN, error fatal); `setup` prints
   `ok    windows image <path>` / `ok    virtio-win ISO <path>` and
   `warn  <warning>`.

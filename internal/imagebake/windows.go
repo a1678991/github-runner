@@ -86,11 +86,11 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 	if err := os.MkdirAll(o.ImageDir, 0o755); err != nil {
 		return err
 	}
-	vhdx, err := o.resolveSource(ctx, o.Image, WindowsVHDX, o.ImageSHA256, "windows image")
+	vhdx, vhdxInfo, err := o.resolveSource(ctx, o.Image, WindowsVHDX, o.ImageSHA256, "windows image")
 	if err != nil {
 		return err
 	}
-	iso, err := o.resolveSource(ctx, o.VirtioWin, VirtioWinISO, o.VirtioWinSHA256, "virtio-win ISO")
+	iso, _, err := o.resolveSource(ctx, o.VirtioWin, VirtioWinISO, o.VirtioWinSHA256, "virtio-win ISO")
 	if err != nil {
 		return err
 	}
@@ -224,15 +224,12 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 		"image":          o.Image,
 		"baked_at":       time.Now().UTC().Format(time.RFC3339),
 	}
-	if config.IsLocalSource(o.Image) {
-		// No ETag to record for a file on disk; size+mtime is what tells
-		// a later reader whether the image behind this base has changed.
-		fi, err := os.Stat(absVHDX)
-		if err != nil {
-			return err
-		}
-		prov["image_size"] = strconv.FormatInt(fi.Size(), 10)
-		prov["image_mtime"] = fi.ModTime().UTC().Format(time.RFC3339)
+	if vhdxInfo != nil {
+		// No ETag to record for a file on disk; size+mtime (from the stat
+		// resolveSource already did) is what tells a later reader whether
+		// the image behind this base has changed.
+		prov["image_size"] = strconv.FormatInt(vhdxInfo.Size(), 10)
+		prov["image_mtime"] = vhdxInfo.ModTime().UTC().Format(time.RFC3339)
 	} else {
 		var imgMeta downloadMeta
 		if mb, err := os.ReadFile(vhdx + ".meta"); err == nil {
@@ -254,54 +251,56 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 // resolveSource returns the local file to use for a windows.image /
 // windows.virtio_win value: a download cached under ImageDir for http(s)
 // sources, or the path itself for local ones (used in place; never copied).
+// info is the stat of a local file, for the caller's provenance record,
+// and nil for a download.
 //
 // A download is checksum-verified when sha is set, otherwise conditional
 // (ETag/Last-Modified); a network failure on the conditional path keeps
 // an existing file, so an upstream outage does not block a rebake. A
 // local file must exist and be regular, and is hashed when sha is set.
-func (o *WindowsOptions) resolveSource(ctx context.Context, src, cachedName, sha, what string) (string, error) {
+func (o *WindowsOptions) resolveSource(ctx context.Context, src, cachedName, sha, what string) (string, os.FileInfo, error) {
 	if config.IsLocalSource(src) {
 		fi, err := os.Stat(src)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", what, err)
+			return "", nil, fmt.Errorf("%s: %w", what, err)
 		}
 		if !fi.Mode().IsRegular() {
-			return "", fmt.Errorf("%s: %s: not a regular file", what, src)
+			return "", nil, fmt.Errorf("%s: %s: not a regular file", what, src)
 		}
 		if sha != "" {
 			got, err := fileSHA256(src)
 			if err != nil {
-				return "", fmt.Errorf("%s: %w", what, err)
+				return "", nil, fmt.Errorf("%s: %w", what, err)
 			}
 			if got != sha {
-				return "", fmt.Errorf("%s: checksum mismatch: got %s want %s", src, got, sha)
+				return "", nil, fmt.Errorf("%s: checksum mismatch: got %s want %s", src, got, sha)
 			}
 		}
 		o.Log.Info("using local "+what, "path", src)
-		return src, nil
+		return src, fi, nil
 	}
 
 	dest := filepath.Join(o.ImageDir, cachedName)
 	o.Log.Info("downloading "+what+" (cached if unchanged)", "url", src)
 	if sha != "" {
 		if err := DownloadVerified(ctx, o.HTTP, src, dest, sha); err != nil {
-			return "", err
+			return "", nil, err
 		}
-		return dest, nil
+		return dest, nil, nil
 	}
 	cached, err := DownloadConditional(ctx, o.HTTP, src, dest)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", err // a cancelled bake is not an upstream outage
+			return "", nil, err // a cancelled bake is not an upstream outage
 		}
 		if _, statErr := os.Stat(dest); statErr != nil {
-			return "", fmt.Errorf("download %s: %w", what, err)
+			return "", nil, fmt.Errorf("download %s: %w", what, err)
 		}
 		o.Log.Warn("conditional download failed; using the cached file", "what", what, "err", err)
-		return dest, nil
+		return dest, nil, nil
 	}
 	if cached {
 		o.Log.Info(what + " unchanged upstream; using cached file")
 	}
-	return dest, nil
+	return dest, nil, nil
 }

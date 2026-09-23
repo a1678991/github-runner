@@ -619,8 +619,10 @@ func TestCheckLocalSource(t *testing.T) {
 	if err := os.WriteFile(file, []byte("image"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// t.TempDir() may itself sit in a namespace the units replace
+	// (TMPDIR=/tmp), so compare against the lexical rule, not "".
 	warning, err := CheckLocalSource(file)
-	if err != nil || warning != "" {
+	if err != nil || warning != hiddenNamespaceWarning(file) {
 		t.Errorf("CheckLocalSource(file) = %q, %v", warning, err)
 	}
 	if _, err := CheckLocalSource(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
@@ -637,6 +639,35 @@ func TestCheckLocalSource(t *testing.T) {
 	}
 	if warning != "" {
 		t.Errorf("warning = %q, want none when the stat fails", warning)
+	}
+}
+
+// The warning half of CheckLocalSource is lexical, so it can be checked
+// against paths that need not exist.
+func TestHiddenNamespaceWarning(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"/srv/images/win.vhdx", ""},
+		{"/var/lib/github-qemu-runner/images/win.vhdx", ""},
+		{"/homer/win.vhdx", ""}, // not /home/
+		{"/home/op/win.vhdx", "ProtectHome=yes"},
+		{"/root/win.vhdx", "ProtectHome=yes"},
+		{"/run/user/1000/win.vhdx", "ProtectHome=yes"},
+		{"/tmp/win.vhdx", "PrivateTmp=yes"},
+		{"/var/tmp/win.vhdx", "PrivateTmp=yes"},
+		// Cleaned before matching, both ways round.
+		{"/tmp//sub/../win.vhdx", "PrivateTmp=yes"},
+		{"/home/../srv/win.vhdx", ""},
+	} {
+		got := hiddenNamespaceWarning(tc.path)
+		if tc.want == "" {
+			if got != "" {
+				t.Errorf("hiddenNamespaceWarning(%q) = %q, want none", tc.path, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, tc.want) || !strings.Contains(got, tc.path) {
+			t.Errorf("hiddenNamespaceWarning(%q) = %q, want one naming the path and %s", tc.path, got, tc.want)
+		}
 	}
 }
 
