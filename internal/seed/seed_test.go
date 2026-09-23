@@ -81,3 +81,39 @@ func TestBuildISO(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildISOFiles(t *testing.T) {
+	if _, err := exec.LookPath("genisoimage"); err != nil {
+		t.Skip("genisoimage not installed")
+	}
+	dir := t.TempDir()
+	iso, err := BuildISOFiles(context.Background(), dir, "GHQSEED", map[string]string{
+		"Unattend.xml":    "<unattend/>",
+		"runner-jit.conf": "JIT",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if iso != filepath.Join(dir, "seed.iso") {
+		t.Errorf("iso path = %q", iso)
+	}
+	fi, err := os.Stat(iso)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("stat = %v, %v", fi, err)
+	}
+	for _, f := range []string{"Unattend.xml", "runner-jit.conf"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	if _, err := exec.LookPath("isoinfo"); err == nil {
+		out, err := exec.Command("isoinfo", "-d", "-i", iso).CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "Volume id: GHQSEED") {
+			t.Errorf("volume id: %v\n%s", err, out)
+		}
+		out, _ = exec.Command("isoinfo", "-J", "-f", "-i", iso).CombinedOutput()
+		if !strings.Contains(string(out), "/Unattend.xml") {
+			t.Errorf("Joliet name not preserved:\n%s", out)
+		}
+	}
+}
