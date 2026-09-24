@@ -182,32 +182,60 @@ try {
         # required (the bake powers off at the end anyway).
         # https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md
         $wingetOK = @(0, -1978335189, -1978335135, -1978334963, -1978334962, -1978334967)
-        function Install-WinGetPackage([string]$id, [string[]]$extra = @()) {
+        $wingetDiag = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
+        New-Item -ItemType Directory -Force 'C:\ghq\winget' | Out-Null
+
+        # One winget install, bounded. A hung installer (the first toolchain
+        # bake sat on VCRedist.2005.x64 until the host's 90-minute timeout,
+        # and the overlay was gone before it could be inspected) is killed
+        # after $timeoutMin, with what it was stuck on sent to the serial
+        # console: the live installer processes, winget's diagnostic log and
+        # the package's own installer log.
+        function Install-WinGetPackage([string]$id, [int]$timeoutMin = 15, [string[]]$extra = @()) {
+            $safe = $id -replace '[^A-Za-z0-9.+-]', '_'
+            $instLog = "C:\ghq\winget\$safe.installer.log"
+            $outFile = "C:\ghq\winget\$safe.out.txt"
             $wgArgs = @('install', '--id', $id, '--exact', '--source', 'winget', '--silent',
-                '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity') + $extra
-            $saved = $ErrorActionPreference
-            $ErrorActionPreference = 'Continue'
-            try {
-                $out = & $winget @wgArgs 2>&1 | Out-String
-            } finally {
-                $ErrorActionPreference = $saved
+                '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity',
+                '--log', $instLog) + $extra
+            # Windows PowerShell 5.1 has no ProcessStartInfo.ArgumentList, so
+            # quote each argument for the MSVCRT command-line parser.
+            $argLine = ($wgArgs | ForEach-Object {
+                if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+            }) -join ' '
+            $started = Get-Date
+            $p = Start-Process -FilePath $winget -ArgumentList $argLine -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError "$outFile.err"
+            if (-not $p.WaitForExit($timeoutMin * 60 * 1000)) {
+                Log "TIMEOUT: winget install $id still running after $timeoutMin min; diagnostics follow"
+                Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $started -and $_.ProcessId -ne $PID } |
+                    ForEach-Object { Log "  proc $($_.ProcessId) $($_.Name): $($_.CommandLine)" }
+                $diag = Get-ChildItem $wingetDiag -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($diag) { Get-Content $diag.FullName -Tail 25 | ForEach-Object { Log "  winget-diag: $_" } }
+                Get-ChildItem 'C:\ghq\winget' -Filter "$safe.installer*" -ErrorAction SilentlyContinue |
+                    ForEach-Object { Get-Content $_.FullName -Tail 25 | ForEach-Object { Log "  installer-log: $_" } }
+                & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+                throw "winget install $id timed out after $timeoutMin min"
             }
-            $rc = $LASTEXITCODE
-            if ($wingetOK -notcontains $rc) { throw "winget install $id failed rc=$rc : $out" }
-            Log "installed $id (rc=$rc)"
+            $rc = $p.ExitCode
+            $mins = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
+            if ($wingetOK -notcontains $rc) {
+                $out = (Get-Content $outFile, "$outFile.err" -ErrorAction SilentlyContinue | Select-Object -Last 30) -join "`n"
+                throw "winget install $id failed rc=$rc : $out"
+            }
+            Log "installed $id (rc=$rc, $mins min)"
         }
 
-        # Every Visual C++ redistributable, both architectures: prebuilt
-        # tools (pnpm, node addons, ...) die with 0xC0000135 without them.
-        foreach ($year in '2005', '2008', '2010', '2012', '2013', '2015+') {
-            foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.$year.$arch" }
-        }
+        # Order: what CI jobs need first (current VC++ runtime, which pnpm
+        # and node addons die without with 0xC0000135; the MSVC toolchain;
+        # gh and jq), then the legacy redistributables, so one misbehaving
+        # old installer cannot hide whether the essentials work.
+        foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.2015+.$arch" }
         # MSBuild + MSVC v143 x64/x86 + Windows 11 SDK (signtool): the VCTools
         # workload requires MSBuild and recommends the compiler and SDK.
         # --override replaces winget's default installer switches, so the
         # silent/wait flags are repeated here.
         # https://learn.microsoft.com/visualstudio/install/workload-component-id-vs-build-tools
-        Install-WinGetPackage 'Microsoft.VisualStudio.2022.BuildTools' @('--override',
+        Install-WinGetPackage 'Microsoft.VisualStudio.2022.BuildTools' 60 @('--override',
             '--wait --quiet --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended')
         $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
         $vsPath = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath }
@@ -217,7 +245,13 @@ try {
         # under Program Files with a machine-PATH link, visible to `runner`
         # (default user scope would land in this Administrator's profile).
         Install-WinGetPackage 'GitHub.cli'
-        Install-WinGetPackage 'jqlang.jq' @('--scope', 'machine')
+        Install-WinGetPackage 'jqlang.jq' 15 @('--scope', 'machine')
+
+        # Every older Visual C++ redistributable, both architectures, for
+        # prebuilt binaries linked against them.
+        foreach ($year in '2013', '2012', '2010', '2008', '2005') {
+            foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.$year.$arch" }
+        }
 
         # --- actions-runner ----------------------------------------------------
         Get-Verified $env_.runner_url 'C:\runner.zip' $env_.runner_sha256
