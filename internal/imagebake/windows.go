@@ -60,7 +60,9 @@ func (o *WindowsOptions) defaults() {
 		o.MemoryMB = 8192
 	}
 	if o.Timeout == 0 {
-		o.Timeout = 30 * time.Minute
+		// bake.ps1 installs VS Build Tools and the VC++ redistributables
+		// through WinGet, which alone takes 15-30 minutes.
+		o.Timeout = 90 * time.Minute
 	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)

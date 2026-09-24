@@ -1,6 +1,6 @@
 # Runs ONCE as Administrator (unattend FirstLogonCommands) during the
-# image bake boot. Installs virtio drivers, the runner user, Git, and the
-# actions runner, then powers off. The host watches the serial console for
+# image bake boot. Installs virtio drivers, the runner user, Git, the build
+# toolchain (via WinGet), and the actions runner, then powers off. The host watches the serial console for
 # BAKE-OK; any failure prints BAKE-FAILED and powers off so the bake is
 # rejected quickly instead of hanging until the host timeout.
 $ErrorActionPreference = 'Stop'
@@ -133,6 +133,73 @@ try {
         }
         if ($LASTEXITCODE -ne 0) { throw "git --version failed rc=$LASTEXITCODE : $gitVer" }
         Log "git: $gitVer"
+
+        # --- build toolchain via WinGet ----------------------------------------
+        # WinGet ships in App Installer on Server 2025, but is registered for a
+        # user only asynchronously after the first logon — and this script IS
+        # the first logon. Register it, then bootstrap the current client via
+        # Repair-WinGetPackageManager (Windows Update is off, so the image's
+        # App Installer may predate the manifests' schema).
+        # https://learn.microsoft.com/windows/package-manager/winget/
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+        Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Scope AllUsers -Force | Out-Null
+        Repair-WinGetPackageManager -AllUsers -Latest
+        $winget = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
+        if (-not $winget) { $winget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" }
+        if (-not (Test-Path $winget)) { throw "winget not found after Repair-WinGetPackageManager" }
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $wgVer = (& $winget --version 2>&1 | Out-String).Trim()
+        } finally {
+            $ErrorActionPreference = $saved
+        }
+        if ($LASTEXITCODE -ne 0) { throw "winget --version failed rc=$LASTEXITCODE : $wgVer" }
+        Log "winget: $wgVer"
+
+        # Success, or an outcome that leaves the package installed:
+        # 0x8A15002B no applicable update, 0x8A150061 / 0x8A15010D already
+        # installed, 0x8A15010E newer already installed, 0x8A150109 reboot
+        # required (the bake powers off at the end anyway).
+        # https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md
+        $wingetOK = @(0, -1978335189, -1978335135, -1978334963, -1978334962, -1978334967)
+        function Install-WinGetPackage([string]$id, [string[]]$extra = @()) {
+            $wgArgs = @('install', '--id', $id, '--exact', '--source', 'winget', '--silent',
+                '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity') + $extra
+            $saved = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $out = & $winget @wgArgs 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $saved
+            }
+            $rc = $LASTEXITCODE
+            if ($wingetOK -notcontains $rc) { throw "winget install $id failed rc=$rc : $out" }
+            Log "installed $id (rc=$rc)"
+        }
+
+        # Every Visual C++ redistributable, both architectures: prebuilt
+        # tools (pnpm, node addons, ...) die with 0xC0000135 without them.
+        foreach ($year in '2005', '2008', '2010', '2012', '2013', '2015+') {
+            foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.$year.$arch" }
+        }
+        # MSBuild + MSVC v143 x64/x86 + Windows 11 SDK (signtool): the VCTools
+        # workload requires MSBuild and recommends the compiler and SDK.
+        # --override replaces winget's default installer switches, so the
+        # silent/wait flags are repeated here.
+        # https://learn.microsoft.com/visualstudio/install/workload-component-id-vs-build-tools
+        Install-WinGetPackage 'Microsoft.VisualStudio.2022.BuildTools' @('--override',
+            '--wait --quiet --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended')
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath }
+        if (-not $vsPath) { throw 'VS Build Tools installed but MSBuild/MSVC not found by vswhere' }
+        Log "VS Build Tools at $vsPath"
+        # CLI tools jobs use. jq is a portable package: machine scope puts it
+        # under Program Files with a machine-PATH link, visible to `runner`
+        # (default user scope would land in this Administrator's profile).
+        Install-WinGetPackage 'GitHub.cli'
+        Install-WinGetPackage 'jqlang.jq' @('--scope', 'machine')
 
         # --- actions-runner ----------------------------------------------------
         Get-Verified $env_.runner_url 'C:\runner.zip' $env_.runner_sha256
