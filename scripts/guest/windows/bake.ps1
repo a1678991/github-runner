@@ -141,10 +141,23 @@ try {
         # Repair-WinGetPackageManager (Windows Update is off, so the image's
         # App Installer may predate the manifests' schema).
         # https://learn.microsoft.com/windows/package-manager/winget/
+        #
+        # No -AllUsers: that provisions machine-wide and registers for this
+        # user asynchronously, and the cmdlet's own version check then reads
+        # the stale registration and throws ("Installer version 'v1.6...'
+        # Expected version 'v1.29...'", winget-cli#4603). Winget is only
+        # needed in this session; what it installs is machine-wide anyway.
+        # The cmdlet's verdict is not trusted either way: re-register and
+        # check the version ourselves below.
         Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
         Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Scope AllUsers -Force | Out-Null
-        Repair-WinGetPackageManager -AllUsers -Latest
+        try {
+            Repair-WinGetPackageManager -Latest
+        } catch {
+            Log "Repair-WinGetPackageManager: $($_.Exception.Message); re-registering and checking the version directly"
+        }
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
         $winget = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
         if (-not $winget) { $winget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" }
         if (-not (Test-Path $winget)) { throw "winget not found after Repair-WinGetPackageManager" }
@@ -156,6 +169,11 @@ try {
             $ErrorActionPreference = $saved
         }
         if ($LASTEXITCODE -ne 0) { throw "winget --version failed rc=$LASTEXITCODE : $wgVer" }
+        # The community source now serves manifest schema 1.12; older
+        # clients cannot read it.
+        if ([version]($wgVer.TrimStart('v') -replace '-.*$', '') -lt [version]'1.12') {
+            throw "winget $wgVer is too old (need >= 1.12) after Repair-WinGetPackageManager"
+        }
         Log "winget: $wgVer"
 
         # Success, or an outcome that leaves the package installed:
