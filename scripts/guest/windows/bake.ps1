@@ -205,6 +205,10 @@ try {
             }) -join ' '
             $started = Get-Date
             $p = Start-Process -FilePath $winget -ArgumentList $argLine -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError "$outFile.err"
+            # Reading Handle while the process lives makes .NET keep it, or
+            # ExitCode comes back $null after WaitForExit (the third bake
+            # failed on 'rc=' with winget mid-install).
+            $null = $p.Handle
             if (-not $p.WaitForExit($timeoutMin * 60 * 1000)) {
                 Log "TIMEOUT: winget install $id still running after $timeoutMin min; diagnostics follow"
                 Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $started -and $_.ProcessId -ne $PID } |
@@ -216,7 +220,9 @@ try {
                 & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
                 throw "winget install $id timed out after $timeoutMin min"
             }
+            $p.WaitForExit()  # completes async output handling after the timed wait
             $rc = $p.ExitCode
+            if ($null -eq $rc) { throw "winget install ${id}: exit code unavailable" }
             $mins = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
             if ($wingetOK -notcontains $rc) {
                 $out = (Get-Content $outFile, "$outFile.err" -ErrorAction SilentlyContinue | Select-Object -Last 30) -join "`n"
