@@ -45,7 +45,7 @@ github:
 #  ovmf_dir: /usr/share/edk2/x64   # auto-detected when unset
 #  packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]  # WinGet IDs baked in; [] for none
 #  build_tools: true         # VS 2022 Build Tools (C++) + Windows 11 SDK
-#  disable_defender: true    # GitHub-hosted-image Defender posture
+#  disable_defender: true    # GitHub-hosted-image Defender posture; false leaves Defender at its defaults
 
 pools:
   - name: fmt

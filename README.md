@@ -203,7 +203,11 @@ interactive session, on an image built to behave like GitHub's
   `shell: pwsh` and the default Windows shell work), `gh`, `jq`, and
   `7z` — the `windows.packages` default list, installed with WinGet at
   bake time. Add any WinGet package ID (`winget search <name>` finds
-  them) or trim the list; `[]` installs none.
+  them) or trim the list; `[]` installs none. A package is installed
+  machine-wide when its manifest offers a machine-scope installer;
+  otherwise with the installer's default scope, which may put the tool
+  in the bake user's profile, where jobs (running as `runner`) cannot
+  see it.
 - **C++ toolchain:** Visual Studio 2022 Build Tools with the C++ workload
   (MSVC, MSBuild) and the Windows 11 SDK, so `signtool`, `link.exe` and
   Rust's `x86_64-pc-windows-msvc` target work
@@ -220,8 +224,15 @@ hosted image's weekly refresh does, and `base-windows.json` records the
 bake's toolchain summary. What the hosted image has and this one
 deliberately lacks: Visual Studio Enterprise, the pre-populated tool
 cache for `actions/setup-*`, Docker, browsers and WebDrivers, Android
-SDK, databases. The bake checks its own toolchain before publishing and
-fails rather than ship an image missing a configured tool.
+SDK, databases. Before publishing, the bake fails unless `git`, `bash`
+(Git's `bin\bash.exe`, first on the machine PATH as on the hosted image)
+and the commands of the default packages it knows (`pwsh`, `gh`, `jq`,
+`7z`, each only when listed) run from the machine PATH, plus MSVC and the
+Windows SDK with `windows.build_tools` and Defender's real-time
+protection being off with `windows.disable_defender`. Other packages are
+verified only by WinGet's result. Changing any `windows.*` bake key takes
+effect at the next `refresh-image`; existing images are not rebaked
+automatically.
 
 A bake with the default options takes 25–45 minutes (Build Tools
 dominates). Besides the GitHub API and release downloads every bake
@@ -346,7 +357,7 @@ pools:
 | `windows.virtio_win` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake. http(s) URL or absolute path; local files are used in place, never copied |
 | `windows.virtio_win_sha256` | no | | Checksum-verifies the virtio-win ISO when set |
 | `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
-| `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]` | WinGet package IDs installed machine-wide in the Windows image; `[]` installs none — see "Windows pools" |
+| `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]` | WinGet package IDs baked into the Windows image; `[]` installs none. Installed machine-wide when the manifest offers a machine-scope installer, otherwise with the installer's default scope, which may leave the tool in the bake user's profile where jobs cannot see it — see "Windows pools" |
 | `windows.build_tools` | no | `true` | Bake VS 2022 Build Tools (C++ workload) and the Windows 11 SDK |
 | `windows.disable_defender` | no | `true` | Apply the GitHub-hosted image's Defender posture (scanning off, `C:\` excluded); `false` leaves Defender at its defaults |
 
