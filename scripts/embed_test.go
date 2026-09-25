@@ -101,7 +101,7 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 	// A native command's stderr merged by 2>&1 arrives as ErrorRecords, which
 	// $ErrorActionPreference = 'Stop' escalates to a terminating
 	// NativeCommandError before any $LASTEXITCODE check can run.
-	for _, call := range []string{"pnputil.exe /add-driver", "& $gitExe --version", "& $exe @argv"} {
+	for _, call := range []string{"pnputil.exe /add-driver", "& $gitExe --version", "& $exe @argv", "& taskkill.exe"} {
 		i := strings.Index(WindowsBake, call)
 		if i < 0 {
 			t.Errorf("bake.ps1 missing %q", call)
@@ -117,7 +117,10 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 		"$env_.packages", "$env_.build_tools", "$env_.disable_defender",
 		// Git configured like the hosted image
 		"/COMPONENTS=gitlfs", "/o:EnableSymlinks=Enabled", "/o:BashTerminalOption=ConHost",
-		"Add-MachinePath 'C:\\Program Files\\Git\\bin'", "safe.directory", "GCM_INTERACTIVE",
+		// Git\bin prepended, as runner-images' Add-MachinePathItem does, so
+		// `shell: bash` finds Git's MINGW64 launcher before Git\usr\bin's
+		// bare bash.exe that PathOption=CmdTools appends.
+		"Add-MachinePath 'C:\\Program Files\\Git\\bin' -Prepend", "safe.directory", "GCM_INTERACTIVE",
 		// system tuning
 		"NoAutoUpdate", "DisableWindowsUpdateAccess", "WaaSMedicSvc", "AllowTelemetry",
 		"MaintenanceDisabled", "ConsentPromptBehaviorAdmin", "SysMain", "ServicesPipeTimeout",
@@ -130,6 +133,10 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 		"Microsoft.VisualStudio.Component.Windows11SDK.26100",
 		// toolchain assertion and summary
 		"signtool.exe", "Log \"toolchain: ",
+		// the check fails unless bash resolves to Git's launcher
+		"'C:\\Program Files\\Git\\bin\\bash.exe'",
+		// the SDK the Build Tools override adds is the one reported
+		"\\bin\\10.0.26100.*\\x64\\signtool.exe",
 		// empty or null package entries never reach winget
 		"$env_.packages | Where-Object { $_ }",
 		// a function that returns a value must not leak WaitForExit's bool
@@ -138,6 +145,11 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 		if !strings.Contains(WindowsBake, want) {
 			t.Errorf("bake.ps1 missing %q", want)
 		}
+	}
+	// The toolchain check sees what the `runner` user's logon will: the
+	// machine PATH only, never this Administrator's user PATH.
+	if strings.Contains(WindowsBake, "GetEnvironmentVariable('Path', 'User')") {
+		t.Error("bake.ps1: the toolchain check must not read the Administrator's user PATH")
 	}
 	// gh and jq come from the configurable package list, not hardcoded installs.
 	for _, gone := range []string{"Install-WinGetPackage 'GitHub.cli'", "Install-WinGetPackage 'jqlang.jq'"} {

@@ -36,9 +36,19 @@ function Get-Verified([string]$url, [string]$dest, [string]$sha256) {
     }
 }
 
-# Appends $dir to the machine PATH (idempotent) and to this session's.
-function Add-MachinePath([string]$dir) {
+# Adds $dir to the machine PATH and to this session's, idempotently:
+# appended by default; with -Prepend moved to the front of both (an existing
+# entry is dropped first), as runner-images' Add-MachinePathItem does, so its
+# commands win over same-named ones in earlier entries.
+function Add-MachinePath([string]$dir, [switch]$Prepend) {
     $cur = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if ($Prepend) {
+        $rest = @($cur -split ';' | Where-Object { $_ -and $_ -ne $dir })
+        [Environment]::SetEnvironmentVariable('Path', ((@($dir) + $rest) -join ';'), 'Machine')
+        $restSession = @($env:Path -split ';' | Where-Object { $_ -and $_ -ne $dir })
+        $env:Path = (@($dir) + $restSession) -join ';'
+        return
+    }
     if (($cur -split ';') -notcontains $dir) {
         [Environment]::SetEnvironmentVariable('Path', "$cur;$dir", 'Machine')
     }
@@ -204,16 +214,20 @@ try {
                 @{PUAProtection = 0}
                 @{SignatureDisableUpdateOnStartupWithoutEngine = $true}
                 @{SubmitSamplesConsent = 2}
-                @{ScanAvgCPULoadFactor = 5; ExclusionPath = @('C:\')}
+                @{ScanAvgCPULoadFactor = 5}
+                @{ExclusionPath = @('C:\')}
                 @{DisableRealtimeMonitoring = $true}
                 @{ScanScheduleDay = 8}
                 @{EnableControlledFolderAccess = 'Disabled'}
                 @{EnableNetworkProtection = 'Disabled'}
                 @{DisableBlockAtFirstSeen = $true}
             )
+            $excluded = $false
             foreach ($pref in $avPrefs) {
-                try { Set-MpPreference @pref -ErrorAction Stop }
-                catch { Log "Set-MpPreference $($pref.Keys -join ','): $($_.Exception.Message)" }
+                try {
+                    Set-MpPreference @pref -ErrorAction Stop
+                    if ($pref.ContainsKey('ExclusionPath')) { $excluded = $true }
+                } catch { Log "Set-MpPreference $($pref.Keys -join ','): $($_.Exception.Message)" }
             }
             $rt = $true
             for ($i = 0; $i -lt 12 -and $rt; $i++) {
@@ -221,7 +235,8 @@ try {
                 if ($rt) { Start-Sleep -Seconds 5 }
             }
             if ($rt) { throw 'Defender real-time protection is still on after Set-MpPreference' }
-            Log 'defender: real-time, behaviour, IOAV and script scanning off; C:\ excluded'
+            $exclMsg = if ($excluded) { 'C:\ excluded' } else { 'C:\ NOT excluded (Set-MpPreference ExclusionPath failed, see above)' }
+            Log "defender: real-time, behaviour, IOAV and script scanning off; $exclMsg"
         } else {
             Log 'disable_defender is false; Defender left at its defaults'
         }
@@ -247,9 +262,13 @@ try {
         }
         if ($LASTEXITCODE -ne 0) { throw "git --version failed rc=$LASTEXITCODE : $gitVer" }
         Log "git: $gitVer"
-        # Hosted-image Git setup: bash/sh on PATH (Git\bin), every checkout
-        # directory trusted, no credential-manager prompts.
-        Add-MachinePath 'C:\Program Files\Git\bin'
+        # Hosted-image Git setup: bash/sh on PATH, every checkout directory
+        # trusted, no credential-manager prompts. PathOption=CmdTools already
+        # appended Git\cmd, Git\mingw64\bin and Git\usr\bin; Git\bin goes in
+        # FRONT of them, as on the hosted image, because `shell: bash` runs
+        # the first bash.exe on PATH and only Git\bin's launcher sets up the
+        # MINGW64 environment (Git\usr\bin\bash.exe runs without MSYSTEM).
+        Add-MachinePath 'C:\Program Files\Git\bin' -Prepend
         $null = Invoke-Native $gitExe @('config', '--system', 'safe.directory', '*')
         [Environment]::SetEnvironmentVariable('GCM_INTERACTIVE', 'Never', 'Machine')
 
@@ -336,7 +355,15 @@ try {
                 if ($diag) { Get-Content $diag.FullName -Tail 25 | ForEach-Object { Log "  winget-diag: $_" } }
                 Get-ChildItem 'C:\ghq\winget' -Filter "$safe.installer*" -ErrorAction SilentlyContinue |
                     ForEach-Object { Get-Content $_.FullName -Tail 25 | ForEach-Object { Log "  installer-log: $_" } }
-                & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+                # Relaxed like the other 2>&1 calls: a taskkill stderr line
+                # must not replace the timeout message below.
+                $saved = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+                } finally {
+                    $ErrorActionPreference = $saved
+                }
                 throw "winget install $id timed out after $timeoutMin min"
             }
             # Completes async output handling after the timed wait. Its bool
@@ -363,10 +390,10 @@ try {
             Assert-WinGetResult $id (Invoke-WinGetInstall $id $timeoutMin $extra)
         }
 
-        # Order: what CI jobs need first (current VC++ runtime, which pnpm
-        # and node addons die without with 0xC0000135; the MSVC toolchain;
-        # gh and jq), then the legacy redistributables, so one misbehaving
-        # old installer cannot hide whether the essentials work.
+        # Order: the current VC++ runtime first (pnpm and node addons die
+        # without it with 0xC0000135), then VS Build Tools when enabled, then
+        # windows.packages, and the legacy redistributables last, so one
+        # misbehaving old installer cannot hide whether the essentials work.
         foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.2015+.$arch" }
         # MSBuild + MSVC v143 x64/x86 + the Windows 11 SDK (signtool). The
         # VCTools workload requires MSBuild and recommends the compiler and an
@@ -410,9 +437,12 @@ try {
         }
 
         # --- toolchain check -----------------------------------------------------
-        # What a job's fresh logon session will see: re-read PATH from the
-        # registry, since this session's copy predates the installs.
-        $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+        # What the `runner` user's logon will see: re-read the machine PATH
+        # from the registry, since this session's copy predates the installs.
+        # This Administrator's user PATH is deliberately left out: a package
+        # the unscoped retry put there is invisible to jobs, so its command
+        # must fail the check rather than pass it.
+        $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         $checks = [ordered]@{ git = '--version'; bash = '--version' }
         $pkgCommands = @{
             'Microsoft.PowerShell' = @('pwsh', '--version')
@@ -425,17 +455,22 @@ try {
         foreach ($name in @($checks.Keys)) {
             $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $cmd) { throw "toolchain check: $name is not on the machine PATH" }
+            if ($name -eq 'bash' -and $cmd.Source -ne 'C:\Program Files\Git\bin\bash.exe') {
+                throw "toolchain check: bash resolves to $($cmd.Source), not Git's launcher C:\Program Files\Git\bin\bash.exe"
+            }
             $ver = ((Invoke-Native $cmd.Source @($checks[$name])) -split "`n")[0].Trim()
-            $summary += "$name=$ver"
+            $summary += "$name=$ver ($($cmd.Source))"
         }
         if ($env_.build_tools) {
             $vc = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
             if (-not $vc) { throw 'toolchain check: vswhere finds no VC.Tools.x86.x64 installation' }
-            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } | Select-Object -First 1
-            if (-not $signtool) { throw 'toolchain check: signtool.exe (Windows SDK, x64) not found' }
+            # The 26100 SDK the Build Tools override adds explicitly, not
+            # whichever SDK the workload happened to recommend.
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.26100.*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $signtool) { throw 'toolchain check: signtool.exe from Windows SDK 10.0.26100 (x64) not found' }
             $summary += "msvc=$vc"
-            $summary += "sdk=$(Split-Path (Split-Path (Split-Path $signtool.FullName)) -Leaf)"
+            $summary += "sdk=$(Split-Path (Split-Path $signtool.DirectoryName) -Leaf)"
         }
         if ($env_.disable_defender) {
             if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { throw 'toolchain check: Defender real-time protection is on' }
