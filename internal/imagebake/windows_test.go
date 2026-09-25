@@ -91,14 +91,17 @@ func TestBakeWindows(t *testing.T) {
 	}
 	images := filepath.Join(dir, "images")
 	err := BakeWindows(context.Background(), WindowsOptions{
-		ImageDir:  images,
-		HTTP:      srv.Client(),
-		APIBase:   srv.URL,
-		Image:     srv.URL + "/image.vhdx",
-		VirtioWin: srv.URL + "/virtio-win.iso",
-		OVMFCode:  filepath.Join(fw, "OVMF_CODE.fd"),
-		OVMFVars:  filepath.Join(fw, "OVMF_VARS.fd"),
-		QEMUBin:   fakeQEMU(t, dir, "BAKE-OK"),
+		ImageDir:        images,
+		HTTP:            srv.Client(),
+		APIBase:         srv.URL,
+		Image:           srv.URL + "/image.vhdx",
+		VirtioWin:       srv.URL + "/virtio-win.iso",
+		OVMFCode:        filepath.Join(fw, "OVMF_CODE.fd"),
+		OVMFVars:        filepath.Join(fw, "OVMF_VARS.fd"),
+		QEMUBin:         fakeQEMU(t, dir, "[bake 00:00:01] toolchain: git=git version 2.55.0 pwsh=7.6.6\n[bake 00:00:02] BAKE-OK"),
+		Packages:        []string{"Microsoft.PowerShell", "jqlang.jq"},
+		BuildTools:      true,
+		DisableDefender: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +125,11 @@ func TestBakeWindows(t *testing.T) {
 	if meta["runner_version"] != "2.337.0" || meta["git_version"] != "2.55.0.windows.5" ||
 		meta["image"] != srv.URL+"/image.vhdx" || meta["image_etag"] != `"img-1"` || meta["baked_at"] == "" {
 		t.Errorf("meta = %v", meta)
+	}
+	if meta["packages"] != "Microsoft.PowerShell,jqlang.jq" || meta["build_tools"] != "true" ||
+		meta["disable_defender"] != "true" || meta["toolchain"] != "git=git version 2.55.0 pwsh=7.6.6" {
+		t.Errorf("parity provenance = packages:%q build_tools:%q disable_defender:%q toolchain:%q",
+			meta["packages"], meta["build_tools"], meta["disable_defender"], meta["toolchain"])
 	}
 	if _, err := os.Stat(filepath.Join(images, "bake-windows")); !os.IsNotExist(err) {
 		t.Error("bake dir not cleaned up")
@@ -219,13 +227,21 @@ func TestBakeSeedContents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var e map[string]string
+	var e map[string]any
 	if err := json.Unmarshal(env, &e); err != nil {
 		t.Fatal(err)
 	}
 	if e["runner_url"] != "https://x/win.zip" || e["runner_sha256"] != strings.Repeat("e", 64) ||
 		e["git_url"] != "https://x/git.exe" || e["git_sha256"] != strings.Repeat("d", 64) {
 		t.Errorf("bake-env = %v", e)
+	}
+	// Packages left nil must still reach the guest as an array: a JSON null
+	// becomes one $null entry in bake.ps1's package loop.
+	if pk, ok := e["packages"].([]any); !ok || len(pk) != 0 {
+		t.Errorf("bake-env packages = %#v, want []", e["packages"])
+	}
+	if e["build_tools"] != false || e["disable_defender"] != false {
+		t.Errorf("bake-env build_tools=%v disable_defender=%v, want false/false (zero options)", e["build_tools"], e["disable_defender"])
 	}
 	if vars, _ := os.ReadFile(filepath.Join(keep, "vars.fd")); string(vars) != "OVMF_VARS.fd" {
 		t.Error("vars.fd must be a copy of the pristine OVMF_VARS")
@@ -358,5 +374,20 @@ func TestBakeWindowsLocalImageMissing(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), missing) {
 		t.Errorf("err = %v, want one naming %s", err, missing)
+	}
+}
+
+func TestToolchainSummary(t *testing.T) {
+	cases := []struct{ console, want string }{
+		{"", ""},
+		{"[bake 1] start\r\n[bake 2] BAKE-OK\r\n", ""},
+		{"[bake 1] toolchain: git=2.55 bash=5.2\r\n[bake 2] BAKE-OK\r\n", "git=2.55 bash=5.2"},
+		{"[bake 1] toolchain: old\n[bake 2] toolchain: git=2.55 msvc=C:\\VS sdk=10.0.26100.0\n", "git=2.55 msvc=C:\\VS sdk=10.0.26100.0"},
+		{"[bake 1] toolchain: no-newline-at-end", "no-newline-at-end"},
+	}
+	for _, tc := range cases {
+		if got := toolchainSummary([]byte(tc.console)); got != tc.want {
+			t.Errorf("toolchainSummary(%q) = %q, want %q", tc.console, got, tc.want)
+		}
 	}
 }

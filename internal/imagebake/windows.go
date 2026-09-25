@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/a1678991/github-qemu-runner/internal/config"
@@ -32,6 +33,13 @@ type WindowsOptions struct {
 	ImageSHA256     string
 	VirtioWin       string
 	VirtioWinSHA256 string
+	// Packages are WinGet package IDs installed machine-wide by bake.ps1.
+	// nil installs none (config supplies the default list).
+	Packages []string
+	// BuildTools installs VS 2022 Build Tools (VCTools) and the Windows 11 SDK.
+	BuildTools bool
+	// DisableDefender applies the GitHub-hosted image's Defender preferences.
+	DisableDefender bool
 	OVMFCode        string
 	OVMFVars        string
 	QEMUBin         string
@@ -77,6 +85,34 @@ const (
 	WindowsBaseMeta = "base-windows.json"
 	windowsBakeDir  = "bake-windows"
 )
+
+// bakeEnv is bake-env.json, read by bake.ps1 through ConvertFrom-Json.
+type bakeEnv struct {
+	RunnerVersion   string   `json:"runner_version"`
+	RunnerURL       string   `json:"runner_url"`
+	RunnerSHA256    string   `json:"runner_sha256"`
+	GitVersion      string   `json:"git_version"`
+	GitURL          string   `json:"git_url"`
+	GitSHA256       string   `json:"git_sha256"`
+	Packages        []string `json:"packages"`
+	BuildTools      bool     `json:"build_tools"`
+	DisableDefender bool     `json:"disable_defender"`
+}
+
+// toolchainSummary returns what bake.ps1 logged after "toolchain: " on
+// the last such console line, or "" when there is none.
+func toolchainSummary(console []byte) string {
+	const marker = "toolchain: "
+	i := bytes.LastIndex(console, []byte(marker))
+	if i < 0 {
+		return ""
+	}
+	rest := console[i+len(marker):]
+	if j := bytes.IndexByte(rest, '\n'); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(string(rest))
+}
 
 // BakeWindows produces <ImageDir>/base-windows.qcow2: download the
 // evaluation VHDX and the virtio-win ISO, resolve the runner and Git
@@ -155,13 +191,21 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 	if err != nil {
 		return err
 	}
-	env, err := json.MarshalIndent(map[string]string{
-		"runner_version": runner.Version,
-		"runner_url":     runner.TarballURL,
-		"runner_sha256":  runner.SHA256,
-		"git_version":    git.Version,
-		"git_url":        git.TarballURL,
-		"git_sha256":     git.SHA256,
+	pkgs := o.Packages
+	if pkgs == nil {
+		// bake.ps1 iterates this; JSON null would arrive as one $null entry.
+		pkgs = []string{}
+	}
+	env, err := json.MarshalIndent(bakeEnv{
+		RunnerVersion:   runner.Version,
+		RunnerURL:       runner.TarballURL,
+		RunnerSHA256:    runner.SHA256,
+		GitVersion:      git.Version,
+		GitURL:          git.TarballURL,
+		GitSHA256:       git.SHA256,
+		Packages:        pkgs,
+		BuildTools:      o.BuildTools,
+		DisableDefender: o.DisableDefender,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -221,10 +265,14 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 		return err
 	}
 	prov := map[string]string{
-		"runner_version": runner.Version,
-		"git_version":    git.Version,
-		"image":          o.Image,
-		"baked_at":       time.Now().UTC().Format(time.RFC3339),
+		"runner_version":   runner.Version,
+		"git_version":      git.Version,
+		"image":            o.Image,
+		"baked_at":         time.Now().UTC().Format(time.RFC3339),
+		"packages":         strings.Join(o.Packages, ","),
+		"build_tools":      strconv.FormatBool(o.BuildTools),
+		"disable_defender": strconv.FormatBool(o.DisableDefender),
+		"toolchain":        toolchainSummary(consoleOut),
 	}
 	if vhdxInfo != nil {
 		// No ETag to record for a file on disk; size+mtime (from the stat
@@ -246,7 +294,7 @@ func BakeWindows(ctx context.Context, o WindowsOptions) error {
 	if err := os.WriteFile(filepath.Join(o.ImageDir, WindowsBaseMeta), append(meta, '\n'), 0o644); err != nil {
 		return err
 	}
-	o.Log.Info("windows bake complete", "base", filepath.Join(o.ImageDir, WindowsBase))
+	o.Log.Info("windows bake complete", "base", filepath.Join(o.ImageDir, WindowsBase), "toolchain", prov["toolchain"])
 	return nil
 }
 
