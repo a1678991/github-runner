@@ -101,7 +101,7 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 	// A native command's stderr merged by 2>&1 arrives as ErrorRecords, which
 	// $ErrorActionPreference = 'Stop' escalates to a terminating
 	// NativeCommandError before any $LASTEXITCODE check can run.
-	for _, call := range []string{"pnputil.exe /add-driver", "& $gitExe --version"} {
+	for _, call := range []string{"pnputil.exe /add-driver", "& $gitExe --version", "& $exe @argv"} {
 		i := strings.Index(WindowsBake, call)
 		if i < 0 {
 			t.Errorf("bake.ps1 missing %q", call)
@@ -110,5 +110,64 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 		if j := strings.LastIndex(WindowsBake[:i], "$ErrorActionPreference = 'Continue'"); j < 0 || i-j > 300 {
 			t.Errorf("bake.ps1: %q must run with $ErrorActionPreference relaxed to 'Continue' so its exit code stays reachable", call)
 		}
+	}
+	// Hosted-image parity (docs/superpowers/specs/2026-09-26-windows-hosted-parity-design.md).
+	for _, want := range []string{
+		// config reaches the guest
+		"$env_.packages", "$env_.build_tools", "$env_.disable_defender",
+		// Git configured like the hosted image
+		"/COMPONENTS=gitlfs", "/o:EnableSymlinks=Enabled", "/o:BashTerminalOption=ConHost",
+		"Add-MachinePath 'C:\\Program Files\\Git\\bin'", "safe.directory", "GCM_INTERACTIVE",
+		// system tuning
+		"NoAutoUpdate", "DisableWindowsUpdateAccess", "WaaSMedicSvc", "AllowTelemetry",
+		"MaintenanceDisabled", "ConsentPromptBehaviorAdmin", "SysMain", "ServicesPipeTimeout",
+		// Defender
+		"Set-MpPreference", "DisableRealtimeMonitoring", "DisableBehaviorMonitoring",
+		"DisableIOAVProtection", "ExclusionPath", "RealTimeProtectionEnabled",
+		// packages: machine scope with a retry on "no applicable installer"
+		"'--scope', 'machine'", "-1978335216", "Assert-WinGetResult",
+		// Build Tools + SDK
+		"Microsoft.VisualStudio.Component.Windows11SDK.26100",
+		// toolchain assertion and summary
+		"signtool.exe", "Log \"toolchain: ",
+		// empty or null package entries never reach winget
+		"$env_.packages | Where-Object { $_ }",
+		// a function that returns a value must not leak WaitForExit's bool
+		"$null = $p.WaitForExit()",
+	} {
+		if !strings.Contains(WindowsBake, want) {
+			t.Errorf("bake.ps1 missing %q", want)
+		}
+	}
+	// gh and jq come from the configurable package list, not hardcoded installs.
+	for _, gone := range []string{"Install-WinGetPackage 'GitHub.cli'", "Install-WinGetPackage 'jqlang.jq'"} {
+		if strings.Contains(WindowsBake, gone) {
+			t.Errorf("bake.ps1 still hardcodes %q; it belongs to windows.packages", gone)
+		}
+	}
+	// Tool checks for packaged commands are keyed off the configured list,
+	// so `packages: []` does not demand pwsh/gh/jq/7z.
+	if !strings.Contains(WindowsBake, "foreach ($id in $packages) { if ($pkgCommands.ContainsKey($id))") {
+		t.Error("bake.ps1: packaged-command checks must be derived from $packages")
+	}
+	// Both Defender blocks (apply, then assert) are gated on the option.
+	if n := strings.Count(WindowsBake, "if ($env_.disable_defender)"); n < 2 {
+		t.Errorf("bake.ps1: want the Defender apply and check both gated on $env_.disable_defender, found %d", n)
+	}
+	// Build Tools install and its checks are gated on the option.
+	if n := strings.Count(WindowsBake, "if ($env_.build_tools)"); n < 2 {
+		t.Errorf("bake.ps1: want the Build Tools install and check both gated on $env_.build_tools, found %d", n)
+	}
+	// Order: Defender off before the first WinGet install (it speeds the
+	// installs up); the toolchain summary right before the sentinel.
+	defender := strings.Index(WindowsBake, "Set-MpPreference @pref")
+	firstInstall := strings.Index(WindowsBake, `Install-WinGetPackage "Microsoft.VCRedist.2015+.$arch"`)
+	summary := strings.Index(WindowsBake, "Log \"toolchain: ")
+	ok := strings.Index(WindowsBake, "Log 'BAKE-OK'")
+	if defender < 0 || firstInstall < 0 || defender > firstInstall {
+		t.Errorf("bake.ps1: Defender preferences (offset %d) must be applied before the first WinGet install (offset %d)", defender, firstInstall)
+	}
+	if summary < 0 || ok < 0 || summary > ok {
+		t.Errorf("bake.ps1: the toolchain summary (offset %d) must be logged before BAKE-OK (offset %d)", summary, ok)
 	}
 }
