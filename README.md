@@ -152,12 +152,13 @@ image is baked from Microsoft's **Windows Server 2025 evaluation** VHDX
 (English, x64): `refresh-image` downloads it (11 GB, cached across bakes
 via ETag), boots it once under UEFI with an answer file that completes
 OOBE unattended, installs virtio drivers from the virtio-win ISO, Git for
-Windows, and the actions runner (win-x64) — the Git installer and the
-runner zip are verified against the SHA-256 upstream publishes in its
-release notes; the VHDX and the driver ISO are TLS-only (with an
-https→http downgrade guard) unless you pin `windows.image_sha256` /
-`windows.virtio_win_sha256` — and flattens the result to
-`base-windows.qcow2`. Job VMs then clone it exactly like Linux
+Windows, the toolchain described below, and the actions runner (win-x64)
+— the Git installer and the runner zip are verified against the SHA-256
+upstream publishes in its release notes, and WinGet checks each package
+installer against the SHA-256 in its manifest; the VHDX and the driver
+ISO are TLS-only (with an https→http downgrade guard) unless you pin
+`windows.image_sha256` / `windows.virtio_win_sha256` — and flattens the
+result to `base-windows.qcow2`. Job VMs then clone it exactly like Linux
 pools: virtio-blk + virtio-net, the JIT config on a seed CD-ROM, one job,
 power off.
 
@@ -183,7 +184,7 @@ windows:
   # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
   # packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]   # WinGet IDs; [] installs none
   # build_tools: true         # VS 2022 Build Tools (C++) + Windows 11 SDK (signtool)
-  # disable_defender: true    # hosted-image Defender posture; false leaves Defender on
+  # disable_defender: true    # hosted-image Defender posture; false leaves Defender at its defaults
 ```
 
 `windows.image` and `windows.virtio_win` each take an http(s) URL — then
@@ -206,13 +207,13 @@ interactive session, on an image built to behave like GitHub's
 - **C++ toolchain:** Visual Studio 2022 Build Tools with the C++ workload
   (MSVC, MSBuild) and the Windows 11 SDK, so `signtool`, `link.exe` and
   Rust's `x86_64-pc-windows-msvc` target work
-  (`windows.build_tools: false` skips them), plus the VC++ 2005–2015+
-  runtimes.
+  (`windows.build_tools: false` skips them). The VC++ 2005–2015+
+  runtimes are installed either way.
 - **Posture like the hosted image:** Windows Update, telemetry, SysMain
   and background maintenance off; no UAC prompt; long paths on;
   Microsoft Defender installed but with real-time, behaviour, script and
   download scanning off and `C:\` excluded
-  (`windows.disable_defender: false` keeps Defender's defaults).
+  (`windows.disable_defender: false` leaves Defender at its defaults).
 
 Tool versions float: each bake installs the current WinGet release, as the
 hosted image's weekly refresh does, and `base-windows.json` records the
@@ -223,8 +224,14 @@ SDK, databases. The bake checks its own toolchain before publishing and
 fails rather than ship an image missing a configured tool.
 
 A bake with the default options takes 25–45 minutes (Build Tools
-dominates) and needs outbound HTTPS to the WinGet source and Microsoft's
-Visual Studio CDN.
+dominates). Besides the GitHub API and release downloads every bake
+already makes (Git and the runner), the guest needs outbound HTTPS to
+the PowerShell Gallery and the NuGet provider bootstrap (for the WinGet
+client module), GitHub releases (the current WinGet client), the WinGet
+source, and each package's own download host: GitHub releases for
+PowerShell, `gh` and `jq`, 7-Zip's site, and Microsoft's download
+servers and Visual Studio CDN for the VC++ runtimes and Build Tools.
+Behind an egress allowlist, an unreachable host fails the bake.
 
 Disk footprint in `paths.images`: about 30 GB steady state per windows base
 (11 GB cached VHDX + 0.9 GB virtio-win ISO + ~18 GB baked
@@ -256,7 +263,8 @@ used as a VHDX, so a differently formatted image has to be fetched to the
 host first. Either way the image must be **generalised** (sysprepped, OOBE
 pending): the
 bake boots it with the seed CD's `Unattend.xml`, which completes setup
-unattended and runs `bake.ps1` (virtio drivers, Git, the runner). An image
+unattended and runs `bake.ps1` (virtio drivers, Git, the toolchain, the
+runner). An image
 captured mid-session, or one that has already been through OOBE, never
 reaches the sentinel and the bake fails.
 
@@ -340,7 +348,7 @@ pools:
 | `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
 | `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]` | WinGet package IDs installed machine-wide in the Windows image; `[]` installs none — see "Windows pools" |
 | `windows.build_tools` | no | `true` | Bake VS 2022 Build Tools (C++ workload) and the Windows 11 SDK |
-| `windows.disable_defender` | no | `true` | Apply the GitHub-hosted image's Defender posture (scanning off, `C:\` excluded); `false` leaves Defender's defaults |
+| `windows.disable_defender` | no | `true` | Apply the GitHub-hosted image's Defender posture (scanning off, `C:\` excluded); `false` leaves Defender at its defaults |
 
 ### Pools
 
