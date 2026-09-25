@@ -202,7 +202,8 @@ interactive session, on an image built to behave like GitHub's
   `safe.directory *`) and its `bash`, PowerShell 7 (`pwsh`, so
   `shell: pwsh` and the default Windows shell work), `gh`, `jq`, and
   `7z` — the `windows.packages` default list, installed with WinGet at
-  bake time. Add any WinGet package ID (`winget search <name>` finds
+  bake time, with WinGet told to prefer MSI/EXE installers over MSIX, as
+  on the hosted image. Add any WinGet package ID (`winget search <name>` finds
   them) or trim the list; `[]` installs none. A package is installed
   machine-wide when its manifest offers a machine-scope installer;
   otherwise with the installer's default scope, which may put the tool

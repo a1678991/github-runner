@@ -141,6 +141,9 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 		"$env_.packages | Where-Object { $_ }",
 		// a function that returns a value must not leak WaitForExit's bool
 		"$null = $p.WaitForExit()",
+		// WinGet prefers MSI/EXE installers over MSIX, as the hosted image
+		// installs them (an MSIX pwsh is a per-user alias, off the machine PATH)
+		"installerTypes", "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\\LocalState\\settings.json",
 	} {
 		if !strings.Contains(WindowsBake, want) {
 			t.Errorf("bake.ps1 missing %q", want)
@@ -178,6 +181,11 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 	ok := strings.Index(WindowsBake, "Log 'BAKE-OK'")
 	if defender < 0 || firstInstall < 0 || defender > firstInstall {
 		t.Errorf("bake.ps1: Defender preferences (offset %d) must be applied before the first WinGet install (offset %d)", defender, firstInstall)
+	}
+	// The installer-type preference is in place before the first install.
+	wgSettings := strings.Index(WindowsBake, "LocalState\\settings.json")
+	if wgSettings < 0 || firstInstall < 0 || wgSettings > firstInstall {
+		t.Errorf("bake.ps1: WinGet settings (offset %d) must be written before the first WinGet install (offset %d)", wgSettings, firstInstall)
 	}
 	if summary < 0 || ok < 0 || summary > ok {
 		t.Errorf("bake.ps1: the toolchain summary (offset %d) must be logged before BAKE-OK (offset %d)", summary, ok)

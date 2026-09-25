@@ -314,6 +314,30 @@ try {
         }
         Log "winget: $wgVer"
 
+        # Prefer MSI/WiX/EXE installers over MSIX. With all else equal WinGet
+        # takes the installer listed first in the manifest, and
+        # Microsoft.PowerShell lists MSIX first: that is a per-user app
+        # execution alias, so pwsh never reached the machine PATH. The hosted
+        # image installs MSI builds, never MSIX tools. `preferences` only
+        # reorders, so a package whose only installer is MSIX still installs.
+        # The bake owns this session, so any existing settings are replaced;
+        # written without a BOM.
+        # https://learn.microsoft.com/windows/package-manager/winget/settings
+        $wgSettings = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\settings.json"
+        New-Item -ItemType Directory -Force (Split-Path $wgSettings) | Out-Null
+        $wgJson = @(
+            '{'
+            '  "$schema": "https://aka.ms/winget-settings.schema.json",'
+            '  "installBehavior": {'
+            '    "preferences": {'
+            '      "installerTypes": ["msi", "wix", "burn", "exe", "inno", "nullsoft", "portable", "zip", "msix", "appx"]'
+            '    }'
+            '  }'
+            '}'
+        ) -join "`n"
+        [IO.File]::WriteAllText($wgSettings, $wgJson)
+        Log 'winget: preferring MSI/WiX/EXE installers over MSIX'
+
         # Success, or an outcome that leaves the package installed:
         # 0x8A15002B no applicable update, 0x8A150061 / 0x8A15010D already
         # installed, 0x8A15010E newer already installed, 0x8A150109 reboot
