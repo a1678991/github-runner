@@ -182,7 +182,7 @@ windows:
   # virtio_win: ...           # versioned https URL of the virtio-win ISO, or an absolute path
   # virtio_win_sha256: ""     # verify the virtio-win ISO when set
   # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
-  # packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]   # WinGet IDs; [] installs none
+  # packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip, LLVM.LLVM]   # WinGet IDs; [] installs none
   # build_tools: true         # VS 2022 Build Tools (C++) + Windows 11 SDK (signtool)
   # disable_defender: true    # hosted-image Defender posture; false leaves Defender at its defaults
 ```
@@ -200,15 +200,16 @@ interactive session, on an image built to behave like GitHub's
 
 - **On the machine PATH:** Git (with Git LFS, symlinks enabled,
   `safe.directory *`) and its `bash`, PowerShell 7 (`pwsh`, so
-  `shell: pwsh` and the default Windows shell work), `gh`, `jq`, and
-  `7z` — the `windows.packages` default list, installed with WinGet at
-  bake time, with WinGet told to prefer MSI/EXE installers over MSIX, as
-  on the hosted image. Add any WinGet package ID (`winget search <name>` finds
-  them) or trim the list; `[]` installs none. A package is installed
-  machine-wide when its manifest offers a machine-scope installer;
-  otherwise with the installer's default scope, which may put the tool
-  in the bake user's profile, where jobs (running as `runner`) cannot
-  see it.
+  `shell: pwsh` and the default Windows shell work), `gh`, `jq`, `7z`,
+  and LLVM's `clang` and `lld-link` (`C:\Program Files\LLVM\bin`, as on
+  the hosted image) — the `windows.packages` default list, installed with
+  WinGet at bake time, with WinGet told to prefer MSI/EXE installers over
+  MSIX, as on the hosted image. Add any WinGet package ID
+  (`winget search <name>` finds them) or trim the list; `[]` installs
+  none. A package is installed machine-wide when its manifest offers a
+  machine-scope installer; otherwise with the installer's default scope,
+  which may put the tool in the bake user's profile, where jobs (running
+  as `runner`) cannot see it.
 - **C++ toolchain:** Visual Studio 2022 Build Tools with the C++ workload
   (MSVC, MSBuild) and the Windows 11 SDK, so `signtool`, `link.exe` and
   Rust's `x86_64-pc-windows-msvc` target work
@@ -228,10 +229,10 @@ cache for `actions/setup-*`, Docker, browsers and WebDrivers, Android
 SDK, databases. Before publishing, the bake fails unless `git`, `bash`
 (Git's `bin\bash.exe`, first on the machine PATH as on the hosted image)
 and the commands of the default packages it knows (`pwsh`, `gh`, `jq`,
-`7z`, each only when listed) run from the machine PATH, plus MSVC and the
-Windows SDK with `windows.build_tools` and Defender's real-time
-protection being off with `windows.disable_defender`. Other packages are
-verified only by WinGet's result. Changing any `windows.*` bake key takes
+`7z`, `clang` and `lld-link`, each only when listed) run from the machine
+PATH, plus MSVC and the Windows SDK with `windows.build_tools` and
+Defender's real-time protection being off with `windows.disable_defender`.
+Other packages are verified only by WinGet's result. Changing any `windows.*` bake key takes
 effect at the next `refresh-image`; existing images are not rebaked
 automatically.
 
@@ -241,7 +242,7 @@ already makes (Git and the runner), the guest needs outbound HTTPS to
 the PowerShell Gallery and the NuGet provider bootstrap (for the WinGet
 client module), GitHub releases (the current WinGet client), the WinGet
 source, and each package's own download host: GitHub releases for
-PowerShell, `gh` and `jq`, 7-Zip's site, and Microsoft's download
+PowerShell, `gh`, `jq` and LLVM, 7-Zip's site, and Microsoft's download
 servers and Visual Studio CDN for the VC++ runtimes and Build Tools.
 Behind an egress allowlist, an unreachable host fails the bake.
 
@@ -358,7 +359,7 @@ pools:
 | `windows.virtio_win` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake. http(s) URL or absolute path; local files are used in place, never copied |
 | `windows.virtio_win_sha256` | no | | Checksum-verifies the virtio-win ISO when set |
 | `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
-| `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]` | WinGet package IDs baked into the Windows image; `[]` installs none. Installed machine-wide when the manifest offers a machine-scope installer, otherwise with the installer's default scope, which may leave the tool in the bake user's profile where jobs cannot see it — see "Windows pools" |
+| `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip, LLVM.LLVM]` | WinGet package IDs baked into the Windows image; `[]` installs none. Installed machine-wide when the manifest offers a machine-scope installer, otherwise with the installer's default scope, which may leave the tool in the bake user's profile where jobs cannot see it — see "Windows pools" |
 | `windows.build_tools` | no | `true` | Bake VS 2022 Build Tools (C++ workload) and the Windows 11 SDK |
 | `windows.disable_defender` | no | `true` | Apply the GitHub-hosted image's Defender posture (scanning off, `C:\` excluded); `false` leaves Defender at its defaults |
 

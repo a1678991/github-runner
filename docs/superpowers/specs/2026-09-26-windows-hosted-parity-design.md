@@ -26,6 +26,7 @@ Key decisions (settled during brainstorming, from the investigation of
 |---|---|
 | Package manager | winget (ships with Windows Server 2025; verified working for the `runner` user). The hosted image uses Chocolatey + vendor installers; we do not install Chocolatey |
 | Default tool set | PowerShell 7, GitHub CLI, jq, 7-Zip via winget; Git for Windows reconfigured for parity (bash on PATH, LFS, symlinks, `safe.directory *`) |
+| LLVM | `LLVM.LLVM` in the default list, with `C:\Program Files\LLVM\bin` added to the machine PATH (the MSI may not): the hosted image ships LLVM, and a Rust workload linking with `-Clinker=lld-link` failed without it |
 | MSVC + Windows SDK | **In the default image**: Visual Studio 2022 Build Tools (`Microsoft.VisualStudio.2022.BuildTools` via WinGet, as the branch already does; the manifest tracks the current 17.14 channel) with the `VCTools` workload plus recommended components, and the Windows 11 SDK 10.0.26100 component added explicitly so `signtool` is guaranteed rather than implied |
 | Defender | **Disabled by default** exactly as the hosted image does (`Set-MpPreference` set from `Configure-WindowsDefender.ps1`), not uninstalled; opt-out knob |
 | System tuning | The subset of the hosted `Configure-System.ps1` that affects CI: Windows Update off by policy and service, telemetry off, SysMain and maintenance/update scheduled tasks off, UAC consent prompt off, `Git\bin` on PATH, execution policy Unrestricted |
@@ -67,6 +68,7 @@ windows:
     - GitHub.cli
     - jqlang.jq
     - 7zip.7zip
+    - LLVM.LLVM
   build_tools: true        # VS 2022 Build Tools (VCTools workload) + Windows 11 SDK 26100
   disable_defender: true   # hosted-image Defender preferences; false leaves Defender at defaults
 ```
@@ -104,7 +106,9 @@ install:
    (`jq`) out of the Administrator profile and on the machine PATH
    (`%ProgramFiles%\WinGet\Links`). 7-Zip's installer adds no PATH entry
    (the hosted image gets one from Chocolatey shims), so the bake appends
-   `C:\Program Files\7-Zip` to the machine `PATH` after the package step.
+   `C:\Program Files\7-Zip` to the machine `PATH` after the package step,
+   and likewise `C:\Program Files\LLVM\bin` (on PATH in the hosted image;
+   the LLVM MSI may not add it).
 3. **Build Tools + SDK** (when `build_tools`): the existing WinGet install
    of `Microsoft.VisualStudio.2022.BuildTools` becomes conditional, and its
    `--override` gains `--add Microsoft.VisualStudio.Component.Windows11SDK.26100`
@@ -141,7 +145,7 @@ install:
    `ServicesPipeTimeout=120000`. `LongPathsEnabled` and
    `DisablePrivacyExperience` remain from the current bake.
 6. **Toolchain assertion** (before `BAKE-OK`): fail the bake unless all
-   of these hold — `pwsh`, `bash`, `jq`, `gh`, `git`, `7z` resolve via
+   of these hold — `pwsh`, `bash`, `jq`, `gh`, `git`, `7z`, `clang`, `lld-link` resolve via
    `Get-Command` in a *fresh* environment (re-read machine+user PATH from
    the registry first, since the bake session's PATH is stale);
    `vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`
