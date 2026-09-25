@@ -236,8 +236,9 @@ Other packages are verified only by WinGet's result. Changing any `windows.*` ba
 effect at the next `refresh-image`; existing images are not rebaked
 automatically.
 
-A bake with the default options takes 25–45 minutes (Build Tools
-dominates). Besides the GitHub API and release downloads every bake
+A bake with the default options takes about 6–7 minutes on an idle KVM
+host and about 20 minutes on a busy one; the bake times out after 90
+minutes. Besides the GitHub API and release downloads every bake
 already makes (Git and the runner), the guest needs outbound HTTPS to
 the PowerShell Gallery and the NuGet provider bootstrap (for the WinGet
 client module), GitHub releases (the current WinGet client), the WinGet
@@ -246,14 +247,17 @@ PowerShell, `gh`, `jq` and LLVM, 7-Zip's site, and Microsoft's download
 servers and Visual Studio CDN for the VC++ runtimes and Build Tools.
 Behind an egress allowlist, an unreachable host fails the bake.
 
-Disk footprint in `paths.images`: about 30 GB steady state per windows base
-(11 GB cached VHDX + 0.9 GB virtio-win ISO + ~18 GB baked
-`base-windows.qcow2`), peaking near 50 GB during a bake, when the overlay and
+Disk footprint in `paths.images`: about 38 GB steady state per windows base
+(11 GB cached VHDX + 0.9 GB virtio-win ISO + ~26 GB baked
+`base-windows.qcow2`), peaking near 70 GB during a bake, when the overlay and
 the `base-windows.qcow2.new` being converted coexist with the previous base.
-Budget 50 GB on top of the Linux images. Local `windows.image` /
+Budget 70 GB on top of the Linux images. Local `windows.image` /
 `windows.virtio_win` files are not copied there, so with both pointing at
-local paths only the baked image counts: roughly 18 GB steady state and
-36 GB during a bake.
+local paths only the baked image counts: roughly 26 GB steady state and
+55 GB during a bake. Windows VMs already idling when a bake finishes keep
+using the previous base until they take a job — the new base applies from
+each slot's next VM — and their open overlays keep the old base's disk
+space allocated until then.
 
 Host prerequisites on top of the Linux qemu backend: OVMF firmware
 (Arch: `pacman -S edk2-ovmf`; Debian/Ubuntu: `apt install ovmf`; NixOS:
