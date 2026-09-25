@@ -181,6 +181,9 @@ windows:
   # virtio_win: ...           # versioned https URL of the virtio-win ISO, or an absolute path
   # virtio_win_sha256: ""     # verify the virtio-win ISO when set
   # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
+  # packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]   # WinGet IDs; [] installs none
+  # build_tools: true         # VS 2022 Build Tools (C++) + Windows 11 SDK (signtool)
+  # disable_defender: true    # hosted-image Defender posture; false leaves Defender on
 ```
 
 `windows.image` and `windows.virtio_win` each take an http(s) URL — then
@@ -191,18 +194,46 @@ regular file, and the controller checks the same at startup; a bake
 triggered by `images.auto_refresh` validates it again itself.
 
 Inside the guest, jobs run as the local administrator `runner` in an
-interactive session (parity with GitHub-hosted Windows runners), with
-`git` on the PATH, Windows Update disabled, and long paths enabled. There
-is no Docker inside Windows jobs.
+interactive session, on an image built to behave like GitHub's
+`windows-2025` hosted image where CI depends on it:
 
-Disk footprint in `paths.images`: about 24 GB steady state per windows base
-(11 GB cached VHDX + 0.9 GB virtio-win ISO + ~12 GB baked
-`base-windows.qcow2`), peaking near 40 GB during a bake, when the overlay and
+- **On the machine PATH:** Git (with Git LFS, symlinks enabled,
+  `safe.directory *`) and its `bash`, PowerShell 7 (`pwsh`, so
+  `shell: pwsh` and the default Windows shell work), `gh`, `jq`, and
+  `7z` — the `windows.packages` default list, installed with WinGet at
+  bake time. Add any WinGet package ID (`winget search <name>` finds
+  them) or trim the list; `[]` installs none.
+- **C++ toolchain:** Visual Studio 2022 Build Tools with the C++ workload
+  (MSVC, MSBuild) and the Windows 11 SDK, so `signtool`, `link.exe` and
+  Rust's `x86_64-pc-windows-msvc` target work
+  (`windows.build_tools: false` skips them), plus the VC++ 2005–2015+
+  runtimes.
+- **Posture like the hosted image:** Windows Update, telemetry, SysMain
+  and background maintenance off; no UAC prompt; long paths on;
+  Microsoft Defender installed but with real-time, behaviour, script and
+  download scanning off and `C:\` excluded
+  (`windows.disable_defender: false` keeps Defender's defaults).
+
+Tool versions float: each bake installs the current WinGet release, as the
+hosted image's weekly refresh does, and `base-windows.json` records the
+bake's toolchain summary. What the hosted image has and this one
+deliberately lacks: Visual Studio Enterprise, the pre-populated tool
+cache for `actions/setup-*`, Docker, browsers and WebDrivers, Android
+SDK, databases. The bake checks its own toolchain before publishing and
+fails rather than ship an image missing a configured tool.
+
+A bake with the default options takes 25–45 minutes (Build Tools
+dominates) and needs outbound HTTPS to the WinGet source and Microsoft's
+Visual Studio CDN.
+
+Disk footprint in `paths.images`: about 30 GB steady state per windows base
+(11 GB cached VHDX + 0.9 GB virtio-win ISO + ~18 GB baked
+`base-windows.qcow2`), peaking near 50 GB during a bake, when the overlay and
 the `base-windows.qcow2.new` being converted coexist with the previous base.
-Budget 40 GB on top of the Linux images. Local `windows.image` /
+Budget 50 GB on top of the Linux images. Local `windows.image` /
 `windows.virtio_win` files are not copied there, so with both pointing at
-local paths only the baked image counts: roughly 12 GB steady state and
-24 GB during a bake.
+local paths only the baked image counts: roughly 18 GB steady state and
+36 GB during a bake.
 
 Host prerequisites on top of the Linux qemu backend: OVMF firmware
 (Arch: `pacman -S edk2-ovmf`; Debian/Ubuntu: `apt install ovmf`; NixOS:
@@ -307,6 +338,9 @@ pools:
 | `windows.virtio_win` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake. http(s) URL or absolute path; local files are used in place, never copied |
 | `windows.virtio_win_sha256` | no | | Checksum-verifies the virtio-win ISO when set |
 | `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
+| `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip]` | WinGet package IDs installed machine-wide in the Windows image; `[]` installs none — see "Windows pools" |
+| `windows.build_tools` | no | `true` | Bake VS 2022 Build Tools (C++ workload) and the Windows 11 SDK |
+| `windows.disable_defender` | no | `true` | Apply the GitHub-hosted image's Defender posture (scanning off, `C:\` excluded); `false` leaves Defender's defaults |
 
 ### Pools
 

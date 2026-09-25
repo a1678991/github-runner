@@ -392,3 +392,10 @@ accept a local file as well as a URL. Everything else in this spec stands;
   it for each local source at startup (warning at WARN, error fatal); `setup` prints
   `ok    windows image <path>` / `ok    virtio-win ISO <path>` and
   `warn  <warning>`.
+
+## Amendment 2026-09-26: hosted-image parity
+
+The baked toolchain, the `windows.packages` / `build_tools` /
+`disable_defender` keys, and the Defender and Windows Update posture are
+specified in
+[2026-09-26-windows-hosted-parity-design.md](2026-09-26-windows-hosted-parity-design.md).
