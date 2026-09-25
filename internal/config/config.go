@@ -22,6 +22,19 @@ const (
 	DefaultVirtioWin = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso"
 )
 
+// DefaultWindowsPackages are the WinGet packages baked into the Windows
+// image when windows.packages is absent: the everyday CLI tools GitHub's
+// windows-2025 hosted image puts on PATH.
+var DefaultWindowsPackages = []string{
+	"Microsoft.PowerShell",
+	"GitHub.cli",
+	"jqlang.jq",
+	"7zip.7zip",
+}
+
+// wingetIDRe matches WinGet package identifiers (e.g. "Microsoft.VCRedist.2015+.x64").
+var wingetIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
+
 // Duration wraps time.Duration to accept "5m"-style YAML strings.
 type Duration time.Duration
 
@@ -95,6 +108,17 @@ type Windows struct {
 	// OVMFDir holds OVMF_CODE*.fd and OVMF_VARS*.fd. Empty means
 	// auto-detect (see ResolveOVMF).
 	OVMFDir string `yaml:"ovmf_dir"`
+	// Packages are WinGet package IDs installed machine-wide in the base
+	// image. Absent (or null) means DefaultWindowsPackages; an explicit
+	// empty list installs none.
+	Packages []string `yaml:"packages"`
+	// BuildTools bakes Visual Studio 2022 Build Tools (VCTools workload)
+	// and the Windows 11 SDK. Pointer so an absent key defaults to true.
+	BuildTools *bool `yaml:"build_tools"`
+	// DisableDefender applies the GitHub-hosted image's Defender
+	// preferences (real-time and related scanning off, C:\ excluded).
+	// Pointer so an absent key defaults to true.
+	DisableDefender *bool `yaml:"disable_defender"`
 }
 
 type Pool struct {
@@ -198,6 +222,17 @@ func (c *Config) applyDefaults() {
 	c.Windows.ImageSHA256 = strings.ToLower(c.Windows.ImageSHA256)
 	c.Windows.VirtioWinSHA256 = strings.ToLower(c.Windows.VirtioWinSHA256)
 	c.Windows.OVMFDir = os.ExpandEnv(c.Windows.OVMFDir)
+	if c.Windows.Packages == nil {
+		c.Windows.Packages = append([]string(nil), DefaultWindowsPackages...)
+	}
+	if c.Windows.BuildTools == nil {
+		on := true
+		c.Windows.BuildTools = &on
+	}
+	if c.Windows.DisableDefender == nil {
+		on := true
+		c.Windows.DisableDefender = &on
+	}
 	for i := range c.Pools {
 		p := &c.Pools[i]
 		if p.Backend == "" {
@@ -261,6 +296,17 @@ func (c *Config) validate() error {
 		if err := validateSource(s.key, s.val); err != nil {
 			return err
 		}
+	}
+	seenPkg := map[string]bool{}
+	for _, id := range c.Windows.Packages {
+		if !wingetIDRe.MatchString(id) {
+			return fmt.Errorf("windows.packages: %q is not a WinGet package ID", id)
+		}
+		// WinGet IDs are case-insensitive.
+		if seenPkg[strings.ToLower(id)] {
+			return fmt.Errorf("windows.packages: %q is listed twice", id)
+		}
+		seenPkg[strings.ToLower(id)] = true
 	}
 	seen := map[string]bool{}
 	for _, p := range c.Pools {

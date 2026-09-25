@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -545,6 +546,9 @@ func TestWindowsPoolValidation(t *testing.T) {
 		{"file:// image", func(y string) string { return y + "windows:\n  image: file:///srv/win.vhdx\n" }, "windows.image: use a plain absolute path, not a file:// URL"},
 		{"relative virtio", func(y string) string { return y + "windows:\n  virtio_win: virtio-win.iso\n" }, "windows.virtio_win must be an http(s) URL or an absolute path"},
 		{"file:// virtio", func(y string) string { return y + "windows:\n  virtio_win: file:///srv/virtio-win.iso\n" }, "windows.virtio_win: use a plain absolute path, not a file:// URL"},
+		{"bad package id", func(y string) string { return y + "windows:\n  packages: [\"jq; rm -rf\"]\n" }, `windows.packages: "jq; rm -rf" is not a WinGet package ID`},
+		{"leading dot package", func(y string) string { return y + "windows:\n  packages: [.foo]\n" }, `windows.packages: ".foo" is not a WinGet package ID`},
+		{"duplicate package", func(y string) string { return y + "windows:\n  packages: [GitHub.cli, github.cli]\n" }, `windows.packages: "github.cli" is listed twice`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -710,5 +714,59 @@ func TestWindowsSHA256Lowercased(t *testing.T) {
 	}
 	if c.Windows.VirtioWinSHA256 != strings.ToLower(mixed) {
 		t.Errorf("VirtioWinSHA256 = %q, want %q", c.Windows.VirtioWinSHA256, strings.ToLower(mixed))
+	}
+}
+
+func TestWindowsParityDefaults(t *testing.T) {
+	c, err := Load(writeConfig(t, windowsPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Microsoft.PowerShell", "GitHub.cli", "jqlang.jq", "7zip.7zip"}
+	if !slices.Equal(c.Windows.Packages, want) {
+		t.Errorf("Packages = %v, want %v", c.Windows.Packages, want)
+	}
+	if c.Windows.BuildTools == nil || !*c.Windows.BuildTools {
+		t.Errorf("BuildTools = %v, want true", c.Windows.BuildTools)
+	}
+	if c.Windows.DisableDefender == nil || !*c.Windows.DisableDefender {
+		t.Errorf("DisableDefender = %v, want true", c.Windows.DisableDefender)
+	}
+	// The default list must be a copy: mutating one config's list must not
+	// leak into the package-level default.
+	c.Windows.Packages[0] = "Changed"
+	if DefaultWindowsPackages[0] != "Microsoft.PowerShell" {
+		t.Error("DefaultWindowsPackages aliased into the loaded config")
+	}
+}
+
+func TestWindowsParityOverrides(t *testing.T) {
+	y := windowsPoolYAML + "windows:\n  packages: [Microsoft.PowerShell, Kitware.CMake]\n  build_tools: false\n  disable_defender: false\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Windows.Packages, []string{"Microsoft.PowerShell", "Kitware.CMake"}) {
+		t.Errorf("Packages = %v", c.Windows.Packages)
+	}
+	if *c.Windows.BuildTools || *c.Windows.DisableDefender {
+		t.Errorf("BuildTools=%v DisableDefender=%v, want both false", *c.Windows.BuildTools, *c.Windows.DisableDefender)
+	}
+}
+
+func TestWindowsPackagesEmptyAndNull(t *testing.T) {
+	c, err := Load(writeConfig(t, windowsPoolYAML+"windows:\n  packages: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Windows.Packages) != 0 {
+		t.Errorf("packages: [] must install nothing, got %v", c.Windows.Packages)
+	}
+	c, err = Load(writeConfig(t, windowsPoolYAML+"windows:\n  packages:\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Windows.Packages, DefaultWindowsPackages) {
+		t.Errorf("packages: (null) must mean the default list, got %v", c.Windows.Packages)
 	}
 }
