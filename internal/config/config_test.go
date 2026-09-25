@@ -722,7 +722,7 @@ func TestWindowsParityDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Microsoft.PowerShell", "GitHub.cli", "jqlang.jq", "7zip.7zip"}
+	want := []string{"Microsoft.PowerShell", "GitHub.cli", "jqlang.jq", "7zip.7zip", "LLVM.LLVM"}
 	if !slices.Equal(c.Windows.Packages, want) {
 		t.Errorf("Packages = %v, want %v", c.Windows.Packages, want)
 	}

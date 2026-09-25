@@ -453,6 +453,8 @@ try {
         # 7-Zip's installer adds no PATH entry (the hosted image gets one
         # from a Chocolatey shim).
         if (Test-Path 'C:\Program Files\7-Zip\7z.exe') { Add-MachinePath 'C:\Program Files\7-Zip' }
+        # The hosted image puts LLVM's bin on PATH; the LLVM MSI may not.
+        if (Test-Path 'C:\Program Files\LLVM\bin\clang.exe') { Add-MachinePath 'C:\Program Files\LLVM\bin' }
 
         # Every older Visual C++ redistributable, both architectures, for
         # prebuilt binaries linked against them.
@@ -473,8 +475,12 @@ try {
             'GitHub.cli'           = @('gh', '--version')
             'jqlang.jq'            = @('jq', '--version')
             '7zip.7zip'            = @('7z', 'i')
+            'LLVM.LLVM'            = @('clang', '--version')
         }
         foreach ($id in $packages) { if ($pkgCommands.ContainsKey($id)) { $checks[$pkgCommands[$id][0]] = $pkgCommands[$id][1] } }
+        # LLVM also has to supply the linker a Rust -Clinker=lld-link job
+        # needs; `lld-link --version` prints "LLD x.y.z" and exits 0.
+        if ($packages -contains 'LLVM.LLVM') { $checks['lld-link'] = '--version' }
         $summary = @()
         foreach ($name in @($checks.Keys)) {
             $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1

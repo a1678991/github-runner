@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -144,10 +145,19 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 		// WinGet prefers MSI/EXE installers over MSIX, as the hosted image
 		// installs them (an MSIX pwsh is a per-user alias, off the machine PATH)
 		"installerTypes", "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\\LocalState\\settings.json",
+		// LLVM's bin on the machine PATH, as the hosted image has it, so
+		// clang and lld-link (a Rust -Clinker=lld-link workload) resolve.
+		"Add-MachinePath 'C:\\Program Files\\LLVM\\bin'",
+		"if ($packages -contains 'LLVM.LLVM') { $checks['lld-link'] = '--version' }",
 	} {
 		if !strings.Contains(WindowsBake, want) {
 			t.Errorf("bake.ps1 missing %q", want)
 		}
+	}
+	// LLVM.LLVM is checked through clang in $pkgCommands (the table is
+	// column-aligned, so match the entry whitespace-tolerantly).
+	if !regexp.MustCompile(`'LLVM\.LLVM'\s*=\s*@\('clang', '--version'\)`).MatchString(WindowsBake) {
+		t.Error("bake.ps1: $pkgCommands missing the 'LLVM.LLVM' = @('clang', '--version') entry")
 	}
 	// The toolchain check sees what the `runner` user's logon will: the
 	// machine PATH only, never this Administrator's user PATH.

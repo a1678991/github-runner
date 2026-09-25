@@ -24,12 +24,14 @@ const (
 
 // DefaultWindowsPackages are the WinGet packages baked into the Windows
 // image when windows.packages is absent: the everyday CLI tools GitHub's
-// windows-2025 hosted image puts on PATH.
+// windows-2025 hosted image puts on PATH, plus its LLVM C/C++ toolchain
+// (clang, lld-link).
 var DefaultWindowsPackages = []string{
 	"Microsoft.PowerShell",
 	"GitHub.cli",
 	"jqlang.jq",
 	"7zip.7zip",
+	"LLVM.LLVM",
 }
 
 // wingetIDRe matches WinGet package identifiers (e.g. "Microsoft.VCRedist.2015+.x64").
