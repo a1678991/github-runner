@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/a1678991/github-runner/compare/v0.6.1...v0.7.0) (2026-09-26)
+
+
+### Features
+
+* **bake:** preinstall Tauri and Chromium native dependencies ([#13](https://github.com/a1678991/github-runner/issues/13)) ([b1dadbc](https://github.com/a1678991/github-runner/commit/b1dadbc247419019d1c62c3ee9e293f0cdede895))
+* Windows job VMs on the qemu backend ([#14](https://github.com/a1678991/github-runner/issues/14)) ([de88f24](https://github.com/a1678991/github-runner/commit/de88f24cd4fd74d308a42a48d34f5079f7f65706))
+
 ## [0.6.1](https://github.com/a1678991/github-runner/compare/v0.6.0...v0.6.1) (2026-07-07)
 
 
