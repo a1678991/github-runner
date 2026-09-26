@@ -1,0 +1,544 @@
+# Runs ONCE as Administrator (unattend FirstLogonCommands) during the
+# image bake boot. Installs virtio drivers, the runner user, and a toolchain
+# matching GitHub's windows-2025 hosted image where CI depends on it (Git,
+# WinGet packages, VS Build Tools + Windows SDK), applies the hosted image's
+# Windows Update / telemetry / Defender posture, installs the actions runner,
+# checks the toolchain, then powers off. The host watches the serial console
+# for BAKE-OK; any failure prints BAKE-FAILED and powers off so the bake is
+# rejected quickly instead of hanging until the host timeout.
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Log degrades to the console alone while the serial port is missing or
+# closed, so logging from the failure paths below can never itself throw.
+$serial = $null
+function Log([string]$msg) {
+    $line = "[bake $(Get-Date -Format HH:mm:ss)] $msg"
+    if ($serial -and $serial.IsOpen) { $serial.WriteLine($line) }
+    Write-Host $line
+}
+
+function Find-VolumeByLabel([string]$label) {
+    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq $label } | Select-Object -First 1
+    if (-not $v) { throw "volume with label $label not found" }
+    return "$($v.DriveLetter):"
+}
+
+function Get-Verified([string]$url, [string]$dest, [string]$sha256) {
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $dest
+    if ($sha256) {
+        $got = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne $sha256.ToLower()) { throw "checksum mismatch for $url : got $got want $sha256" }
+        Log "verified sha256 of $(Split-Path $dest -Leaf)"
+    } else {
+        Log "no checksum for $(Split-Path $dest -Leaf); relying on TLS only"
+    }
+}
+
+# Adds $dir to the machine PATH and to this session's, idempotently:
+# appended by default; with -Prepend moved to the front of both (an existing
+# entry is dropped first), as runner-images' Add-MachinePathItem does, so its
+# commands win over same-named ones in earlier entries.
+function Add-MachinePath([string]$dir, [switch]$Prepend) {
+    $cur = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if ($Prepend) {
+        $rest = @($cur -split ';' | Where-Object { $_ -and $_ -ne $dir })
+        [Environment]::SetEnvironmentVariable('Path', ((@($dir) + $rest) -join ';'), 'Machine')
+        $restSession = @($env:Path -split ';' | Where-Object { $_ -and $_ -ne $dir })
+        $env:Path = (@($dir) + $restSession) -join ';'
+        return
+    }
+    if (($cur -split ';') -notcontains $dir) {
+        [Environment]::SetEnvironmentVariable('Path', "$cur;$dir", 'Machine')
+    }
+    if (($env:Path -split ';') -notcontains $dir) { $env:Path = "$env:Path;$dir" }
+}
+
+# Creates the key when needed, then sets one value.
+function Set-Reg([string]$path, [string]$name, $value, [string]$type = 'DWord') {
+    if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+    Set-ItemProperty -Path $path -Name $name -Value $value -Type $type
+}
+
+# Runs a native command and returns its trimmed output, throwing on a
+# non-zero exit. Under $ErrorActionPreference = 'Stop' the stderr that 2>&1
+# merges arrives as ErrorRecords and would abort before the rc check.
+function Invoke-Native([string]$exe, [string[]]$argv) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = (& $exe @argv 2>&1 | Out-String).Trim()
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    if ($LASTEXITCODE -ne 0) { throw "$exe $($argv -join ' ') failed rc=$LASTEXITCODE : $out" }
+    return $out
+}
+
+# The outermost try exists for its finally: powering the guest off is the
+# only way the host's bake ever finishes, so serial construction and
+# Open() must sit INSIDE it. Outside, a COM1 failure would terminate the
+# script before any finally ran and leave qemu up until the host timeout.
+try {
+    $serial = New-Object System.IO.Ports.SerialPort 'COM1', 115200, 'None', 8, 'One'
+    $serial.Open()
+
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        Log "start; $($os.Caption) build $($os.BuildNumber) firmware=$env:firmware_type"
+        $seed = Find-VolumeByLabel 'GHQSEED'
+        $env_ = Get-Content "$seed\bake-env.json" -Raw | ConvertFrom-Json
+
+        # --- virtio drivers ---------------------------------------------------
+        # The dummy virtio-blk disk the host attaches makes viostor bind to real
+        # hardware here, which is what registers it as a boot-start driver so
+        # clones can boot from virtio-blk. NetKVM binding brings the network up.
+        $vwin = (Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and (Test-Path "$($_.DriveLetter):\virtio-win-guest-tools.exe") } | Select-Object -First 1)
+        if (-not $vwin) { throw 'virtio-win ISO not found' }
+        $vwin = "$($vwin.DriveLetter):"
+        $osDir = if (Test-Path "$vwin\viostor\2k25") { '2k25' } else { '2k22' }
+        Log "virtio-win at $vwin, driver folder $osDir"
+        foreach ($drv in 'viostor', 'NetKVM', 'vioscsi', 'Balloon', 'viorng', 'vioserial', 'pvpanic', 'qemufwcfg') {
+            $inf = Get-ChildItem "$vwin\$drv\$osDir\amd64\*.inf" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $inf) { throw "driver $drv not found under $vwin\$drv\$osDir\amd64" }
+            # Under $ErrorActionPreference = 'Stop', the stderr that 2>&1
+            # merges into the success stream arrives as ErrorRecords and is
+            # escalated to a terminating NativeCommandError before the rc
+            # check below can run. Relax the preference for the call only.
+            $saved = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $out = & pnputil.exe /add-driver $inf.FullName /install 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $saved
+            }
+            if ($LASTEXITCODE -ne 0) { throw "pnputil $drv failed rc=$LASTEXITCODE : $out" }
+            Log "installed $drv"
+        }
+        Start-Sleep -Seconds 5
+        $viostor = Get-CimInstance Win32_SystemDriver -Filter "Name='viostor'"
+        Log "viostor state=$($viostor.State) startmode=$($viostor.StartMode)"
+        if ($viostor.StartMode -ne 'Boot') { throw 'viostor is not a boot-start driver; clones would not boot from virtio-blk' }
+
+        $deadline = (Get-Date).AddMinutes(3)
+        $ip = $null
+        while ((Get-Date) -lt $deadline) {
+            $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '10.0.2.*' }
+            if ($ip) { break }
+            Start-Sleep -Seconds 3
+        }
+        if (-not $ip) { throw 'no 10.0.2.x address within 3 minutes (virtio-net not up)' }
+        Log "network up: $($ip.IPAddress)"
+
+        # --- runner user + autologon -----------------------------------------
+        # Interactive session for GitHub-hosted parity (GUI-touching tests
+        # work). The password never leaves this VM; the image is disposable.
+        $pw = 'Aa1' + (-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 29 | ForEach-Object { [char]$_ }))
+        New-LocalUser -Name runner -Password (ConvertTo-SecureString $pw -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires | Out-Null
+        Add-LocalGroupMember -Group Administrators -Member runner
+        $wl = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        Set-ItemProperty $wl AutoAdminLogon -Value '1' -Type String
+        Set-ItemProperty $wl DefaultUserName -Value 'runner' -Type String
+        Set-ItemProperty $wl DefaultPassword -Value $pw -Type String
+        Set-ItemProperty $wl DefaultDomainName -Value $env:COMPUTERNAME -Type String
+        Remove-ItemProperty $wl AutoLogonCount -ErrorAction SilentlyContinue
+        Log 'runner user + autologon configured'
+
+        # --- policies and services -------------------------------------------
+        # GitHub-hosted parity (actions/runner-images Configure-System.ps1 and
+        # Configure-BaseImage.ps1): nothing in a job VM updates, reports or
+        # maintains itself in the background, and admins get no UAC prompt.
+        Set-Service wuauserv -StartupType Disabled
+        Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
+        $wu = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+        Set-Reg "$wu\AU" NoAutoUpdate 1
+        Set-Reg "$wu\AU" AUOptions 1
+        Set-Reg $wu DoNotConnectToWindowsUpdateInternetLocations 1
+        Set-Reg $wu DisableWindowsUpdateAccess 1
+        # WaaSMedicSvc re-enables Windows Update and refuses Set-Service even
+        # for administrators; the hosted image flips its Start value instead.
+        try { Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\WaaSMedicSvc' Start 4 }
+        catch { Log "WaaSMedicSvc: $($_.Exception.Message)" }
+        foreach ($svc in 'DiagTrack', 'dmwappushservice', 'SysMain') {
+            Set-Service $svc -StartupType Disabled -ErrorAction SilentlyContinue
+            Stop-Service $svc -Force -ErrorAction SilentlyContinue
+        }
+        Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection' AllowTelemetry 0
+        Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' AllowTelemetry 0
+        Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' MaintenanceDisabled 1
+        # Some of these tasks belong to SYSTEM and refuse an administrator;
+        # count those instead of failing the bake over them.
+        $taskSkips = 0
+        foreach ($tp in '\Microsoft\Windows\WindowsUpdate\', '\Microsoft\Windows\UpdateOrchestrator\',
+            '\Microsoft\Windows\Maintenance\', '\Microsoft\Windows\Application Experience\',
+            '\Microsoft\Windows\Customer Experience Improvement Program\', '\Microsoft\Windows\Defrag\',
+            '\Microsoft\Windows\DiskCleanup\', '\Microsoft\Windows\Windows Error Reporting\') {
+            foreach ($task in @(Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue)) {
+                try { $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null } catch { $taskSkips++ }
+            }
+        }
+        Get-ScheduledTask -TaskName ServerManager -ErrorAction SilentlyContinue | Disable-ScheduledTask | Out-Null
+        Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' ConsentPromptBehaviorAdmin 0
+        Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control' ServicesPipeTimeout 120000
+        # What Set-ExecutionPolicy -Scope LocalMachine writes, without its
+        # "overridden by a more specific scope" error under -ExecutionPolicy Bypass.
+        Set-Reg 'HKLM:\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell' ExecutionPolicy 'Unrestricted' 'String'
+        New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE' -Force | Out-Null
+        Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE' DisablePrivacyExperience -Value 1 -Type DWord
+        Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' RealTimeIsUniversal -Value 1 -Type DWord
+        Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled -Value 1 -Type DWord
+        powercfg /change monitor-timeout-ac 0 | Out-Null
+        powercfg /change standby-timeout-ac 0 | Out-Null
+        Log "policies applied ($taskSkips protected scheduled tasks left as they were)"
+
+        # --- Defender ----------------------------------------------------------
+        # The hosted image's preferences (actions/runner-images
+        # Configure-WindowsDefender.ps1): Defender stays installed, scanning
+        # is off and C:\ is excluded. Applied before the WinGet installs so
+        # they are not scanned either. One call per preference, so a
+        # parameter this build rejects is logged rather than fatal.
+        if ($env_.disable_defender) {
+            $avPrefs = @(
+                @{DisableArchiveScanning = $true}
+                @{DisableAutoExclusions = $true}
+                @{DisableBehaviorMonitoring = $true}
+                @{DisableCatchupFullScan = $true}
+                @{DisableCatchupQuickScan = $true}
+                @{DisableIntrusionPreventionSystem = $true}
+                @{DisableIOAVProtection = $true}
+                @{DisablePrivacyMode = $true}
+                @{DisableScanningNetworkFiles = $true}
+                @{DisableScriptScanning = $true}
+                @{MAPSReporting = 0}
+                @{PUAProtection = 0}
+                @{SignatureDisableUpdateOnStartupWithoutEngine = $true}
+                @{SubmitSamplesConsent = 2}
+                @{ScanAvgCPULoadFactor = 5}
+                @{ExclusionPath = @('C:\')}
+                @{DisableRealtimeMonitoring = $true}
+                @{ScanScheduleDay = 8}
+                @{EnableControlledFolderAccess = 'Disabled'}
+                @{EnableNetworkProtection = 'Disabled'}
+                @{DisableBlockAtFirstSeen = $true}
+            )
+            $excluded = $false
+            foreach ($pref in $avPrefs) {
+                try {
+                    Set-MpPreference @pref -ErrorAction Stop
+                    if ($pref.ContainsKey('ExclusionPath')) { $excluded = $true }
+                } catch { Log "Set-MpPreference $($pref.Keys -join ','): $($_.Exception.Message)" }
+            }
+            $rt = $true
+            for ($i = 0; $i -lt 12 -and $rt; $i++) {
+                $rt = (Get-MpComputerStatus).RealTimeProtectionEnabled
+                if ($rt) { Start-Sleep -Seconds 5 }
+            }
+            if ($rt) { throw 'Defender real-time protection is still on after Set-MpPreference' }
+            $exclMsg = if ($excluded) { 'C:\ excluded' } else { 'C:\ NOT excluded (Set-MpPreference ExclusionPath failed, see above)' }
+            Log "defender: real-time, behaviour, IOAV and script scanning off; $exclMsg"
+        } else {
+            Log 'disable_defender is false; Defender left at its defaults'
+        }
+
+        # --- Git for Windows ---------------------------------------------------
+        Get-Verified $env_.git_url 'C:\git-installer.exe' $env_.git_sha256
+        # Options as on the hosted image: Git LFS, symlinks, ConHost bash.
+        $p = Start-Process 'C:\git-installer.exe' -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-',
+            '/COMPONENTS=gitlfs', '/o:PathOption=CmdTools', '/o:BashTerminalOption=ConHost', '/o:EnableSymlinks=Enabled' -Wait -PassThru
+        if ($p.ExitCode -ne 0) { throw "git installer exit code $($p.ExitCode)" }
+        Remove-Item 'C:\git-installer.exe'
+        # Same NativeCommandError trap as pnputil above; the explicit
+        # Test-Path and rc check keep a broken install fatal even though the
+        # preference is relaxed around the call.
+        $gitExe = 'C:\Program Files\Git\cmd\git.exe'
+        if (-not (Test-Path $gitExe)) { throw "git not found at $gitExe after install" }
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $gitVer = (& $gitExe --version 2>&1 | Out-String).Trim()
+        } finally {
+            $ErrorActionPreference = $saved
+        }
+        if ($LASTEXITCODE -ne 0) { throw "git --version failed rc=$LASTEXITCODE : $gitVer" }
+        Log "git: $gitVer"
+        # Hosted-image Git setup: bash/sh on PATH, every checkout directory
+        # trusted, no credential-manager prompts. PathOption=CmdTools already
+        # appended Git\cmd, Git\mingw64\bin and Git\usr\bin; Git\bin goes in
+        # FRONT of them, as on the hosted image, because `shell: bash` runs
+        # the first bash.exe on PATH and only Git\bin's launcher sets up the
+        # MINGW64 environment (Git\usr\bin\bash.exe runs without MSYSTEM).
+        Add-MachinePath 'C:\Program Files\Git\bin' -Prepend
+        $null = Invoke-Native $gitExe @('config', '--system', 'safe.directory', '*')
+        [Environment]::SetEnvironmentVariable('GCM_INTERACTIVE', 'Never', 'Machine')
+
+        # --- build toolchain via WinGet ----------------------------------------
+        # WinGet ships in App Installer on Server 2025, but is registered for a
+        # user only asynchronously after the first logon -- and this script IS
+        # the first logon. Register it, then bootstrap the current client via
+        # Repair-WinGetPackageManager (Windows Update is off, so the image's
+        # App Installer may predate the manifests' schema).
+        # https://learn.microsoft.com/windows/package-manager/winget/
+        #
+        # No -AllUsers: that provisions machine-wide and registers for this
+        # user asynchronously, and the cmdlet's own version check then reads
+        # the stale registration and throws ("Installer version 'v1.6...'
+        # Expected version 'v1.29...'", winget-cli#4603). Winget is only
+        # needed in this session; what it installs is machine-wide anyway.
+        # The cmdlet's verdict is not trusted either way: re-register and
+        # check the version ourselves below.
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+        Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Scope AllUsers -Force | Out-Null
+        try {
+            Repair-WinGetPackageManager -Latest
+        } catch {
+            Log "Repair-WinGetPackageManager: $($_.Exception.Message); re-registering and checking the version directly"
+        }
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+        $winget = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
+        if (-not $winget) { $winget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" }
+        if (-not (Test-Path $winget)) { throw "winget not found after Repair-WinGetPackageManager" }
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $wgVer = (& $winget --version 2>&1 | Out-String).Trim()
+        } finally {
+            $ErrorActionPreference = $saved
+        }
+        if ($LASTEXITCODE -ne 0) { throw "winget --version failed rc=$LASTEXITCODE : $wgVer" }
+        # The community source now serves manifest schema 1.12; older
+        # clients cannot read it.
+        if ([version]($wgVer.TrimStart('v') -replace '-.*$', '') -lt [version]'1.12') {
+            throw "winget $wgVer is too old (need >= 1.12) after Repair-WinGetPackageManager"
+        }
+        Log "winget: $wgVer"
+
+        # Prefer MSI/WiX/EXE installers over MSIX. With all else equal WinGet
+        # takes the installer listed first in the manifest, and
+        # Microsoft.PowerShell lists MSIX first: that is a per-user app
+        # execution alias, so pwsh never reached the machine PATH. The hosted
+        # image installs MSI builds, never MSIX tools. `preferences` only
+        # reorders, so a package whose only installer is MSIX still installs.
+        # The bake owns this session, so any existing settings are replaced;
+        # written without a BOM.
+        # https://learn.microsoft.com/windows/package-manager/winget/settings
+        $wgSettings = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\settings.json"
+        New-Item -ItemType Directory -Force (Split-Path $wgSettings) | Out-Null
+        $wgJson = @(
+            '{'
+            '  "$schema": "https://aka.ms/winget-settings.schema.json",'
+            '  "installBehavior": {'
+            '    "preferences": {'
+            '      "installerTypes": ["msi", "wix", "burn", "exe", "inno", "nullsoft", "portable", "zip", "msix", "appx"]'
+            '    }'
+            '  }'
+            '}'
+        ) -join "`n"
+        [IO.File]::WriteAllText($wgSettings, $wgJson)
+        Log 'winget: preferring MSI/WiX/EXE installers over MSIX'
+
+        # Success, or an outcome that leaves the package installed:
+        # 0x8A15002B no applicable update, 0x8A150061 / 0x8A15010D already
+        # installed, 0x8A15010E newer already installed, 0x8A150109 reboot
+        # required (the bake powers off at the end anyway).
+        # https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md
+        $wingetOK = @(0, -1978335189, -1978335135, -1978334963, -1978334962, -1978334967)
+        $wingetDiag = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"
+        New-Item -ItemType Directory -Force 'C:\ghq\winget' | Out-Null
+
+        # One winget install, bounded; returns WinGet's exit code. A hung
+        # installer (the first toolchain bake sat on VCRedist.2005.x64 until
+        # the host's 90-minute timeout, and the overlay was gone before it
+        # could be inspected) is killed after $timeoutMin, with what it was
+        # stuck on sent to the serial console: the live installer processes,
+        # winget's diagnostic log and the package's own installer log.
+        function Invoke-WinGetInstall([string]$id, [int]$timeoutMin = 15, [string[]]$extra = @()) {
+            $safe = $id -replace '[^A-Za-z0-9.+-]', '_'
+            $instLog = "C:\ghq\winget\$safe.installer.log"
+            $outFile = "C:\ghq\winget\$safe.out.txt"
+            $wgArgs = @('install', '--id', $id, '--exact', '--source', 'winget', '--silent',
+                '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity',
+                '--log', $instLog) + $extra
+            # Windows PowerShell 5.1 has no ProcessStartInfo.ArgumentList, so
+            # quote each argument for the MSVCRT command-line parser.
+            $argLine = ($wgArgs | ForEach-Object {
+                if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+            }) -join ' '
+            $started = Get-Date
+            $p = Start-Process -FilePath $winget -ArgumentList $argLine -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError "$outFile.err"
+            # Reading Handle while the process lives makes .NET keep it, or
+            # ExitCode comes back $null after WaitForExit (the third bake
+            # failed on 'rc=' with winget mid-install).
+            $null = $p.Handle
+            if (-not $p.WaitForExit($timeoutMin * 60 * 1000)) {
+                Log "TIMEOUT: winget install $id still running after $timeoutMin min; diagnostics follow"
+                Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $started -and $_.ProcessId -ne $PID } |
+                    ForEach-Object { Log "  proc $($_.ProcessId) $($_.Name): $($_.CommandLine)" }
+                $diag = Get-ChildItem $wingetDiag -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($diag) { Get-Content $diag.FullName -Tail 25 | ForEach-Object { Log "  winget-diag: $_" } }
+                Get-ChildItem 'C:\ghq\winget' -Filter "$safe.installer*" -ErrorAction SilentlyContinue |
+                    ForEach-Object { Get-Content $_.FullName -Tail 25 | ForEach-Object { Log "  installer-log: $_" } }
+                # Relaxed like the other 2>&1 calls: a taskkill stderr line
+                # must not replace the timeout message below.
+                $saved = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+                } finally {
+                    $ErrorActionPreference = $saved
+                }
+                throw "winget install $id timed out after $timeoutMin min"
+            }
+            # Completes async output handling after the timed wait. Its bool
+            # must not join this function's return value.
+            $null = $p.WaitForExit()
+            $rc = $p.ExitCode
+            if ($null -eq $rc) { throw "winget install ${id}: exit code unavailable" }
+            $script:wingetMinutes = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
+            return $rc
+        }
+
+        # Throws with the tail of WinGet's output unless $rc means installed.
+        function Assert-WinGetResult([string]$id, [int]$rc) {
+            if ($wingetOK -notcontains $rc) {
+                $safe = $id -replace '[^A-Za-z0-9.+-]', '_'
+                $outFile = "C:\ghq\winget\$safe.out.txt"
+                $out = (Get-Content $outFile, "$outFile.err" -ErrorAction SilentlyContinue | Select-Object -Last 30) -join "`n"
+                throw "winget install $id failed rc=$rc : $out"
+            }
+            Log "installed $id (rc=$rc, $script:wingetMinutes min)"
+        }
+
+        function Install-WinGetPackage([string]$id, [int]$timeoutMin = 15, [string[]]$extra = @()) {
+            Assert-WinGetResult $id (Invoke-WinGetInstall $id $timeoutMin $extra)
+        }
+
+        # Order: the current VC++ runtime first (pnpm and node addons die
+        # without it with 0xC0000135), then VS Build Tools when enabled, then
+        # windows.packages, and the legacy redistributables last, so one
+        # misbehaving old installer cannot hide whether the essentials work.
+        foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.2015+.$arch" }
+        # MSBuild + MSVC v143 x64/x86 + the Windows 11 SDK (signtool). The
+        # VCTools workload requires MSBuild and recommends the compiler and an
+        # SDK; the 26100 SDK is added explicitly so signtool is guaranteed.
+        # --override replaces winget's default installer switches, so the
+        # silent/wait flags are repeated here.
+        # https://learn.microsoft.com/visualstudio/install/workload-component-id-vs-build-tools
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if ($env_.build_tools) {
+            Install-WinGetPackage 'Microsoft.VisualStudio.2022.BuildTools' 60 @('--override',
+                '--wait --quiet --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.Windows11SDK.26100')
+            $vsPath = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath }
+            if (-not $vsPath) { throw 'VS Build Tools installed but MSBuild/MSVC not found by vswhere' }
+            Log "VS Build Tools at $vsPath"
+        } else {
+            Log 'build_tools is false; skipping VS Build Tools and the Windows SDK'
+        }
+
+        # windows.packages, machine-wide so the `runner` user sees them (the
+        # default user scope would land in this Administrator's profile).
+        # A manifest with no machine-scoped installer answers
+        # APPINSTALLER_CLI_ERROR_NO_APPLICABLE_INSTALLER; install it unscoped.
+        $noApplicable = -1978335216  # 0x8A150010
+        $packages = @($env_.packages | Where-Object { $_ })
+        foreach ($id in $packages) {
+            $rc = Invoke-WinGetInstall $id 20 @('--scope', 'machine')
+            if ($rc -eq $noApplicable) {
+                Log "$id has no machine-scoped installer; retrying without --scope"
+                $rc = Invoke-WinGetInstall $id 20
+            }
+            Assert-WinGetResult $id $rc
+        }
+        # 7-Zip's installer adds no PATH entry (the hosted image gets one
+        # from a Chocolatey shim).
+        if (Test-Path 'C:\Program Files\7-Zip\7z.exe') { Add-MachinePath 'C:\Program Files\7-Zip' }
+        # The hosted image puts LLVM's bin on PATH; the LLVM MSI may not.
+        if (Test-Path 'C:\Program Files\LLVM\bin\clang.exe') { Add-MachinePath 'C:\Program Files\LLVM\bin' }
+
+        # Every older Visual C++ redistributable, both architectures, for
+        # prebuilt binaries linked against them.
+        foreach ($year in '2013', '2012', '2010', '2008', '2005') {
+            foreach ($arch in 'x86', 'x64') { Install-WinGetPackage "Microsoft.VCRedist.$year.$arch" }
+        }
+
+        # --- toolchain check -----------------------------------------------------
+        # What the `runner` user's logon will see: re-read the machine PATH
+        # from the registry, since this session's copy predates the installs.
+        # This Administrator's user PATH is deliberately left out: a package
+        # the unscoped retry put there is invisible to jobs, so its command
+        # must fail the check rather than pass it.
+        $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $checks = [ordered]@{ git = '--version'; bash = '--version' }
+        $pkgCommands = @{
+            'Microsoft.PowerShell' = @('pwsh', '--version')
+            'GitHub.cli'           = @('gh', '--version')
+            'jqlang.jq'            = @('jq', '--version')
+            '7zip.7zip'            = @('7z', 'i')
+            'LLVM.LLVM'            = @('clang', '--version')
+        }
+        foreach ($id in $packages) { if ($pkgCommands.ContainsKey($id)) { $checks[$pkgCommands[$id][0]] = $pkgCommands[$id][1] } }
+        # LLVM also has to supply the linker a Rust -Clinker=lld-link job
+        # needs; `lld-link --version` prints "LLD x.y.z" and exits 0.
+        if ($packages -contains 'LLVM.LLVM') { $checks['lld-link'] = '--version' }
+        $summary = @()
+        foreach ($name in @($checks.Keys)) {
+            $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $cmd) { throw "toolchain check: $name is not on the machine PATH" }
+            if ($name -eq 'bash' -and $cmd.Source -ne 'C:\Program Files\Git\bin\bash.exe') {
+                throw "toolchain check: bash resolves to $($cmd.Source), not Git's launcher C:\Program Files\Git\bin\bash.exe"
+            }
+            $ver = ((Invoke-Native $cmd.Source @($checks[$name])) -split "`n")[0].Trim()
+            $summary += "$name=$ver ($($cmd.Source))"
+        }
+        if ($env_.build_tools) {
+            $vc = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            if (-not $vc) { throw 'toolchain check: vswhere finds no VC.Tools.x86.x64 installation' }
+            # The 26100 SDK the Build Tools override adds explicitly, not
+            # whichever SDK the workload happened to recommend.
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.26100.*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $signtool) { throw 'toolchain check: signtool.exe from Windows SDK 10.0.26100 (x64) not found' }
+            $summary += "msvc=$vc"
+            $summary += "sdk=$(Split-Path (Split-Path $signtool.DirectoryName) -Leaf)"
+        }
+        if ($env_.disable_defender) {
+            if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { throw 'toolchain check: Defender real-time protection is on' }
+            $summary += 'defender_rt=off'
+        }
+        Log "toolchain: $($summary -join ' ')"
+
+        # --- actions-runner ----------------------------------------------------
+        Get-Verified $env_.runner_url 'C:\runner.zip' $env_.runner_sha256
+        New-Item -ItemType Directory -Force 'C:\actions-runner' | Out-Null
+        Expand-Archive 'C:\runner.zip' -DestinationPath 'C:\actions-runner' -Force
+        Remove-Item 'C:\runner.zip'
+        if (-not (Test-Path 'C:\actions-runner\run.cmd')) { throw 'run.cmd missing after extract' }
+        Log "actions-runner $($env_.runner_version) extracted"
+
+        # --- run-one-job startup task ----------------------------------------
+        New-Item -ItemType Directory -Force 'C:\ghq' | Out-Null
+        Copy-Item "$seed\run-one-job.ps1" 'C:\ghq\run-one-job.ps1'
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\ghq\run-one-job.ps1'
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User 'runner'
+        $principal = New-ScheduledTaskPrincipal -UserId 'runner' -LogonType Interactive -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Days 3) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName 'ghq-run-one-job' -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        Log 'scheduled task registered'
+
+        # --- licence -----------------------------------------------------------
+        try {
+            & cscript.exe //nologo C:\Windows\System32\slmgr.vbs /ato | Out-Null
+            $lic = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" | Select-Object -First 1  # well-known Windows SLID, not a secret
+            Log "licence status=$($lic.LicenseStatus) grace=$($lic.GracePeriodRemaining)min"
+        } catch { Log "licence activation skipped: $($_.Exception.Message)" }
+
+        Log 'BAKE-OK'
+    } catch {
+        Log "BAKE-FAILED: $($_.Exception.Message) at $($_.InvocationInfo.PositionMessage)"
+    } finally {
+        if ($serial -and $serial.IsOpen) { $serial.Close() }
+    }
+} finally {
+    Stop-Computer -Force
+}

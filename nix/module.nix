@@ -46,6 +46,8 @@ in
       '';
     };
 
+    windows.enable = lib.mkEnableOption "Windows pools (adds OVMF firmware and sets windows.ovmf_dir)";
+
     refresh = {
       enable = lib.mkEnableOption "periodic image refresh via a systemd timer";
       schedule = lib.mkOption {
@@ -63,6 +65,10 @@ in
   config = lib.mkIf cfg.enable {
     services.github-qemu-runner.settings.github.private_key_path =
       lib.mkDefault "\${CREDENTIALS_DIRECTORY}/app-key.pem";
+
+    services.github-qemu-runner.settings.windows.ovmf_dir = lib.mkIf cfg.windows.enable (
+      lib.mkDefault "${pkgs.OVMF.fd}/FV"
+    );
 
     users.users.gh-runner = {
       isSystemUser = true;
@@ -117,7 +123,10 @@ in
         SupplementaryGroups = [ "kvm" ];
         # No LoadCredential: the bake needs no GitHub App auth.
         ExecStart = "${lib.getExe cfg.package} -config ${configFile} refresh-image";
-        TimeoutStartSec = "30min";
+        # 3h, not systemd's 90s default: the Linux bake runs first, then a
+        # windows pool adds an 11 GB evaluation-VHDX download, a bake VM with
+        # its own 30-minute timeout, and a qemu-img convert of a 64 GiB image.
+        TimeoutStartSec = "3h";
         NoNewPrivileges = true;
         ProtectSystem = "strict";
         ProtectHome = true;

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,21 +43,33 @@ func MetaData(instanceID, hostname string) string {
 // dir/seed.iso with the volume label cloud-init's NoCloud datasource looks
 // for. Requires genisoimage on PATH.
 func BuildISO(ctx context.Context, dir, userData, metaData string) (string, error) {
-	if err := os.WriteFile(filepath.Join(dir, "user-data"), []byte(userData), 0o600); err != nil {
-		return "", err
+	return BuildISOFiles(ctx, dir, "cidata", map[string]string{
+		"user-data": userData,
+		"meta-data": metaData,
+	})
+}
+
+// BuildISOFiles writes files (name -> content) into dir and packs them
+// into dir/seed.iso with the given volume label. Joliet keeps the exact
+// (mixed-case) names, which Windows needs for Unattend.xml; Rock Ridge
+// does the same for Linux.
+func BuildISOFiles(ctx context.Context, dir, volid string, files map[string]string) (string, error) {
+	names := make([]string, 0, len(files))
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			return "", err
+		}
+		names = append(names, name)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "meta-data"), []byte(metaData), 0o600); err != nil {
-		return "", err
-	}
+	sort.Strings(names)
 	iso := filepath.Join(dir, "seed.iso")
 	cmd := exec.CommandContext(ctx, "genisoimage",
-		"-output", "seed.iso", "-volid", "cidata", "-joliet", "-rock",
-		"user-data", "meta-data")
+		append([]string{"-output", "seed.iso", "-volid", volid, "-joliet", "-rock"}, names...)...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("genisoimage: %v: %s", err, out)
 	}
-	// The ISO carries the JIT config; match user-data's 0600.
+	// The ISO may carry the JIT config; match the source files' 0600.
 	if err := os.Chmod(iso, 0o600); err != nil {
 		return "", err
 	}

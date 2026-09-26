@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -480,5 +481,292 @@ func TestIsolationValidationErrors(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+const windowsPoolYAML = `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key_path: /tmp/key.pem
+pools:
+  - name: win
+    os: windows
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 4
+    memory_mb: 8192
+    disk_gb: 80
+    labels: [self-hosted, windows, x64]
+`
+
+func TestWindowsPoolDefaults(t *testing.T) {
+	c, err := Load(writeConfig(t, windowsPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pools[0].OS != "windows" || c.Pools[0].Backend != "qemu" {
+		t.Errorf("pool = %+v", c.Pools[0])
+	}
+	if c.Windows.Image != DefaultWindowsImage {
+		t.Errorf("Image = %q", c.Windows.Image)
+	}
+	if c.Windows.VirtioWin != DefaultVirtioWin {
+		t.Errorf("VirtioWin = %q", c.Windows.VirtioWin)
+	}
+	if !c.HasQEMUOS("windows") || c.HasQEMUOS("linux") {
+		t.Error("HasQEMUOS wrong")
+	}
+}
+
+func TestLinuxPoolOSDefault(t *testing.T) {
+	c, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Pools[0].OS != "linux" || !c.HasQEMUOS("linux") || c.HasQEMUOS("windows") {
+		t.Errorf("OS = %q", c.Pools[0].OS)
+	}
+}
+
+func TestWindowsPoolValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(string) string
+		wantErr string
+	}{
+		{"bad os", func(y string) string { return strings.Replace(y, "os: windows", "os: bsd", 1) }, `os must be "linux" or "windows"`},
+		{"docker backend", func(y string) string { return strings.Replace(y, "os: windows", "os: windows\n    backend: docker", 1) }, "os: windows requires backend: qemu"},
+		{"low memory", func(y string) string { return strings.Replace(y, "memory_mb: 8192", "memory_mb: 1024", 1) }, "memory_mb must be >= 2048"},
+		{"relative ovmf", func(y string) string { return y + "windows:\n  ovmf_dir: share/ovmf\n" }, "windows.ovmf_dir must be an absolute path"},
+		{"bad sha", func(y string) string { return y + "windows:\n  image_sha256: abc\n" }, "windows.image_sha256 must be 64 hex characters"},
+		{"bad virtio sha", func(y string) string { return y + "windows:\n  virtio_win_sha256: xyz\n" }, "windows.virtio_win_sha256 must be 64 hex characters"},
+		{"relative image", func(y string) string { return y + "windows:\n  image: srv/win.vhdx\n" }, "windows.image must be an http(s) URL or an absolute path"},
+		{"file:// image", func(y string) string { return y + "windows:\n  image: file:///srv/win.vhdx\n" }, "windows.image: use a plain absolute path, not a file:// URL"},
+		{"relative virtio", func(y string) string { return y + "windows:\n  virtio_win: virtio-win.iso\n" }, "windows.virtio_win must be an http(s) URL or an absolute path"},
+		{"file:// virtio", func(y string) string { return y + "windows:\n  virtio_win: file:///srv/virtio-win.iso\n" }, "windows.virtio_win: use a plain absolute path, not a file:// URL"},
+		{"bad package id", func(y string) string { return y + "windows:\n  packages: [\"jq; rm -rf\"]\n" }, `windows.packages: "jq; rm -rf" is not a WinGet package ID`},
+		{"leading dot package", func(y string) string { return y + "windows:\n  packages: [.foo]\n" }, `windows.packages: ".foo" is not a WinGet package ID`},
+		{"duplicate package", func(y string) string { return y + "windows:\n  packages: [GitHub.cli, github.cli]\n" }, `windows.packages: "github.cli" is listed twice`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.mutate(windowsPoolYAML)))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestWindowsBlockOverrides(t *testing.T) {
+	y := windowsPoolYAML + "windows:\n  image: https://example.com/w.vhdx\n  image_sha256: " +
+		strings.Repeat("a", 64) + "\n  ovmf_dir: /usr/share/edk2/x64\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.Image != "https://example.com/w.vhdx" || c.Windows.OVMFDir != "/usr/share/edk2/x64" {
+		t.Errorf("Windows = %+v", c.Windows)
+	}
+}
+
+// A local file is a first-class source for both keys: absolute paths are
+// accepted and kept verbatim (the bake uses them in place).
+func TestWindowsLocalSources(t *testing.T) {
+	y := windowsPoolYAML + "windows:\n  image: /srv/win.vhdx\n  virtio_win: /srv/virtio-win.iso\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.Image != "/srv/win.vhdx" || c.Windows.VirtioWin != "/srv/virtio-win.iso" {
+		t.Errorf("Windows = %+v", c.Windows)
+	}
+	if !IsLocalSource(c.Windows.Image) || !IsLocalSource(c.Windows.VirtioWin) {
+		t.Error("absolute paths must be local sources")
+	}
+}
+
+func TestWindowsSourcesExpandEnv(t *testing.T) {
+	t.Setenv("GHQ_TEST_IMAGES", "/srv/images")
+	y := windowsPoolYAML + "windows:\n  image: ${GHQ_TEST_IMAGES}/win.vhdx\n  virtio_win: ${GHQ_TEST_IMAGES}/virtio-win.iso\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.Image != "/srv/images/win.vhdx" || c.Windows.VirtioWin != "/srv/images/virtio-win.iso" {
+		t.Errorf("Windows = %+v", c.Windows)
+	}
+}
+
+func TestIsLocalSource(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"/srv/win.vhdx", true},
+		{"https://example.com/w.vhdx", false},
+		{"http://example.com/w.vhdx", false},
+		{"srv/win.vhdx", false},
+		{"", false},
+	} {
+		if got := IsLocalSource(tc.in); got != tc.want {
+			t.Errorf("IsLocalSource(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCheckLocalSource(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "win.vhdx")
+	if err := os.WriteFile(file, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// t.TempDir() may itself sit in a namespace the units replace
+	// (TMPDIR=/tmp), so compare against the lexical rule, not "".
+	warning, err := CheckLocalSource(file)
+	if err != nil || warning != hiddenNamespaceWarning(file) {
+		t.Errorf("CheckLocalSource(file) = %q, %v", warning, err)
+	}
+	if _, err := CheckLocalSource(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("directory: err = %v, want not a regular file", err)
+	}
+	if _, err := CheckLocalSource(filepath.Join(dir, "missing.vhdx")); err == nil {
+		t.Error("missing file must be an error")
+	}
+	// ProtectHome=yes hides /home from the service; warn, don't fail:
+	// `setup` and the controller may well be able to read the file.
+	warning, err = CheckLocalSource("/home/nonexistent-user/win.vhdx")
+	if err == nil {
+		t.Skip("path under /home unexpectedly exists")
+	}
+	if warning != "" {
+		t.Errorf("warning = %q, want none when the stat fails", warning)
+	}
+}
+
+// The warning half of CheckLocalSource is lexical, so it can be checked
+// against paths that need not exist.
+func TestHiddenNamespaceWarning(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"/srv/images/win.vhdx", ""},
+		{"/var/lib/github-qemu-runner/images/win.vhdx", ""},
+		{"/homer/win.vhdx", ""}, // not /home/
+		{"/home/op/win.vhdx", "ProtectHome=yes"},
+		{"/root/win.vhdx", "ProtectHome=yes"},
+		{"/run/user/1000/win.vhdx", "ProtectHome=yes"},
+		{"/tmp/win.vhdx", "PrivateTmp=yes"},
+		{"/var/tmp/win.vhdx", "PrivateTmp=yes"},
+		// Cleaned before matching, both ways round.
+		{"/tmp//sub/../win.vhdx", "PrivateTmp=yes"},
+		{"/home/../srv/win.vhdx", ""},
+	} {
+		got := hiddenNamespaceWarning(tc.path)
+		if tc.want == "" {
+			if got != "" {
+				t.Errorf("hiddenNamespaceWarning(%q) = %q, want none", tc.path, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, tc.want) || !strings.Contains(got, tc.path) {
+			t.Errorf("hiddenNamespaceWarning(%q) = %q, want one naming the path and %s", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestCheckLocalSourceWarnsUnderHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || !strings.HasPrefix(home, "/home/") {
+		t.Skipf("home directory %q is not under /home: %v", home, err)
+	}
+	dir, err := os.MkdirTemp(home, "ghq-test-")
+	if err != nil {
+		t.Skipf("cannot create a directory under %s: %v", home, err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	file := filepath.Join(dir, "win.vhdx")
+	if err := os.WriteFile(file, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := CheckLocalSource(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warning, "ProtectHome=yes") {
+		t.Errorf("warning = %q, want a ProtectHome warning", warning)
+	}
+}
+
+func TestWindowsSHA256Lowercased(t *testing.T) {
+	// Microsoft publishes evaluation-media digests in uppercase; the
+	// verifier compares against lowercase hex, so Load must fold case.
+	upper := strings.Repeat("DEADBEEF", 8)
+	mixed := strings.Repeat("cAfE", 16)
+	y := windowsPoolYAML + "windows:\n  image_sha256: " + upper +
+		"\n  virtio_win_sha256: " + mixed + "\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Windows.ImageSHA256 != strings.ToLower(upper) {
+		t.Errorf("ImageSHA256 = %q, want %q", c.Windows.ImageSHA256, strings.ToLower(upper))
+	}
+	if c.Windows.VirtioWinSHA256 != strings.ToLower(mixed) {
+		t.Errorf("VirtioWinSHA256 = %q, want %q", c.Windows.VirtioWinSHA256, strings.ToLower(mixed))
+	}
+}
+
+func TestWindowsParityDefaults(t *testing.T) {
+	c, err := Load(writeConfig(t, windowsPoolYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Microsoft.PowerShell", "GitHub.cli", "jqlang.jq", "7zip.7zip", "LLVM.LLVM"}
+	if !slices.Equal(c.Windows.Packages, want) {
+		t.Errorf("Packages = %v, want %v", c.Windows.Packages, want)
+	}
+	if c.Windows.BuildTools == nil || !*c.Windows.BuildTools {
+		t.Errorf("BuildTools = %v, want true", c.Windows.BuildTools)
+	}
+	if c.Windows.DisableDefender == nil || !*c.Windows.DisableDefender {
+		t.Errorf("DisableDefender = %v, want true", c.Windows.DisableDefender)
+	}
+	// The default list must be a copy: mutating one config's list must not
+	// leak into the package-level default.
+	c.Windows.Packages[0] = "Changed"
+	if DefaultWindowsPackages[0] != "Microsoft.PowerShell" {
+		t.Error("DefaultWindowsPackages aliased into the loaded config")
+	}
+}
+
+func TestWindowsParityOverrides(t *testing.T) {
+	y := windowsPoolYAML + "windows:\n  packages: [Microsoft.PowerShell, Kitware.CMake]\n  build_tools: false\n  disable_defender: false\n"
+	c, err := Load(writeConfig(t, y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Windows.Packages, []string{"Microsoft.PowerShell", "Kitware.CMake"}) {
+		t.Errorf("Packages = %v", c.Windows.Packages)
+	}
+	if *c.Windows.BuildTools || *c.Windows.DisableDefender {
+		t.Errorf("BuildTools=%v DisableDefender=%v, want both false", *c.Windows.BuildTools, *c.Windows.DisableDefender)
+	}
+}
+
+func TestWindowsPackagesEmptyAndNull(t *testing.T) {
+	c, err := Load(writeConfig(t, windowsPoolYAML+"windows:\n  packages: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Windows.Packages) != 0 {
+		t.Errorf("packages: [] must install nothing, got %v", c.Windows.Packages)
+	}
+	c, err = Load(writeConfig(t, windowsPoolYAML+"windows:\n  packages:\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.Windows.Packages, DefaultWindowsPackages) {
+		t.Errorf("packages: (null) must mean the default list, got %v", c.Windows.Packages)
 	}
 }

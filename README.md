@@ -1,10 +1,10 @@
 # github-qemu-runner
 
-Ephemeral GitHub Actions self-hosted runners on Linux. Every job runs in a
-disposable QEMU/KVM virtual machine that is destroyed afterwards — the VM is
-the isolation boundary. A sandboxed Docker backend (gVisor by default, or a
-faster seccomp mode) is available as a fallback for hosts without `/dev/kvm`
-(see below). Linux sibling of
+Ephemeral GitHub Actions self-hosted runners on a Linux host. Every job runs
+in a disposable QEMU/KVM virtual machine — a Linux or a Windows guest — that
+is destroyed afterwards; the VM is the isolation boundary. A sandboxed
+Docker backend (gVisor by default, or a faster seccomp mode) is available as
+a fallback for hosts without `/dev/kvm` (see below). Linux sibling of
 [github-tart-runner](https://github.com/a1678991/github-tart-runner) (macOS).
 
 Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
@@ -20,6 +20,8 @@ Design: `docs/superpowers/specs/2026-06-10-qemu-runner-design.md`.
 - Optional [Docker backend](#docker-backend-hosts-without-devkvm) for hosts
   without KVM and for arm64, with per-pool `isolation: gvisor | seccomp`
   (seccomp = no sandbox overhead, for jobs that don't need Docker inside)
+- Optional [Windows pools](#windows-pools) on the qemu backend
+  (`os: windows`), baked from the Windows Server evaluation image
 - GitHub Enterprise Server support via `github.api_base_url`
 - Graceful drain on stop (busy runners get `drain_timeout` to finish);
   automatic crash recovery with orphan VM/record reaping on startup
@@ -143,11 +145,170 @@ github-qemu-runner`. Label docker pools with the real architecture (e.g.
 `arm64`), and as with the qemu backend: never attach runners to public
 repositories.
 
+## Windows pools
+
+`backend: qemu` pools can run Windows guests with `os: windows`. The base
+image is baked from Microsoft's **Windows Server 2025 evaluation** VHDX
+(English, x64): `refresh-image` downloads it (11 GB, cached across bakes
+via ETag), boots it once under UEFI with an answer file that completes
+OOBE unattended, installs virtio drivers from the virtio-win ISO, Git for
+Windows, the toolchain described below, and the actions runner (win-x64)
+— the Git installer and the runner zip are verified against the SHA-256
+upstream publishes in its release notes, and WinGet checks each package
+installer against the SHA-256 in its manifest; the VHDX and the driver
+ISO are TLS-only (with an https→http downgrade guard) unless you pin
+`windows.image_sha256` / `windows.virtio_win_sha256` — and flattens the
+result to `base-windows.qcow2`. Job VMs then clone it exactly like Linux
+pools: virtio-blk + virtio-net, the JIT config on a seed CD-ROM, one job,
+power off.
+
+```yaml
+pools:
+  - name: win
+    os: windows
+    scope: org
+    org: my-org
+    count: 1
+    cpus: 4
+    memory_mb: 8192            # >= 2048 on windows pools
+    disk_gb: 80                # floor: the image's 64 GiB virtual size
+    labels: [self-hosted, windows, x64]
+
+# optional overrides; every key has a default
+windows:
+  # image: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX;
+  #                           # an absolute path to a local image works too
+  # image_sha256: ""          # verify when set; Microsoft publishes no checksum file
+  # virtio_win: ...           # versioned https URL of the virtio-win ISO, or an absolute path
+  # virtio_win_sha256: ""     # verify the virtio-win ISO when set
+  # ovmf_dir: /usr/share/edk2/x64   # auto-detected on Arch and Debian/Ubuntu
+  # packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip, LLVM.LLVM]   # WinGet IDs; [] installs none
+  # build_tools: true         # VS 2022 Build Tools (C++) + Windows 11 SDK (signtool)
+  # disable_defender: true    # hosted-image Defender posture; false leaves Defender at its defaults
+```
+
+`windows.image` and `windows.virtio_win` each take an http(s) URL — then
+the file is downloaded into `paths.images` and cached across bakes — or an
+absolute path to a file already on the host, which the bake reads where it
+lies and never copies. `setup` reports whether a local path exists and is a
+regular file, and the controller checks the same at startup; a bake
+triggered by `images.auto_refresh` validates it again itself.
+
+Inside the guest, jobs run as the local administrator `runner` in an
+interactive session, on an image built to behave like GitHub's
+`windows-2025` hosted image where CI depends on it:
+
+- **On the machine PATH:** Git (with Git LFS, symlinks enabled,
+  `safe.directory *`) and its `bash`, PowerShell 7 (`pwsh`, so
+  `shell: pwsh` and the default Windows shell work), `gh`, `jq`, `7z`,
+  and LLVM's `clang` and `lld-link` (`C:\Program Files\LLVM\bin`, as on
+  the hosted image) — the `windows.packages` default list, installed with
+  WinGet at bake time, with WinGet told to prefer MSI/EXE installers over
+  MSIX, as on the hosted image. Add any WinGet package ID
+  (`winget search <name>` finds them) or trim the list; `[]` installs
+  none. A package is installed machine-wide when its manifest offers a
+  machine-scope installer; otherwise with the installer's default scope,
+  which may put the tool in the bake user's profile, where jobs (running
+  as `runner`) cannot see it.
+- **C++ toolchain:** Visual Studio 2022 Build Tools with the C++ workload
+  (MSVC, MSBuild) and the Windows 11 SDK, so `signtool`, `link.exe` and
+  Rust's `x86_64-pc-windows-msvc` target work
+  (`windows.build_tools: false` skips them). The VC++ 2005–2015+
+  runtimes are installed either way.
+- **Posture like the hosted image:** Windows Update, telemetry, SysMain
+  and background maintenance off; no UAC prompt; long paths on;
+  Microsoft Defender installed but with real-time, behaviour, script and
+  download scanning off and `C:\` excluded
+  (`windows.disable_defender: false` leaves Defender at its defaults).
+
+Tool versions float: each bake installs the current WinGet release, as the
+hosted image's weekly refresh does, and `base-windows.json` records the
+bake's toolchain summary. What the hosted image has and this one
+deliberately lacks: Visual Studio Enterprise, the pre-populated tool
+cache for `actions/setup-*`, Docker, browsers and WebDrivers, Android
+SDK, databases. Before publishing, the bake fails unless `git`, `bash`
+(Git's `bin\bash.exe`, first on the machine PATH as on the hosted image)
+and the commands of the default packages it knows (`pwsh`, `gh`, `jq`,
+`7z`, `clang` and `lld-link`, each only when listed) run from the machine
+PATH, plus MSVC and the Windows SDK with `windows.build_tools` and
+Defender's real-time protection being off with `windows.disable_defender`.
+Other packages are verified only by WinGet's result. Changing any `windows.*` bake key takes
+effect at the next `refresh-image`; existing images are not rebaked
+automatically.
+
+A bake with the default options takes about 6–7 minutes on an idle KVM
+host and about 20 minutes on a busy one; the bake times out after 90
+minutes. Besides the GitHub API and release downloads every bake
+already makes (Git and the runner), the guest needs outbound HTTPS to
+the PowerShell Gallery and the NuGet provider bootstrap (for the WinGet
+client module), GitHub releases (the current WinGet client), the WinGet
+source, and each package's own download host: GitHub releases for
+PowerShell, `gh`, `jq` and LLVM, 7-Zip's site, and Microsoft's download
+servers and Visual Studio CDN for the VC++ runtimes and Build Tools.
+Behind an egress allowlist, an unreachable host fails the bake.
+
+Disk footprint in `paths.images`: about 38 GB steady state per windows base
+(11 GB cached VHDX + 0.9 GB virtio-win ISO + ~26 GB baked
+`base-windows.qcow2`), peaking near 70 GB during a bake, when the overlay and
+the `base-windows.qcow2.new` being converted coexist with the previous base.
+Budget 70 GB on top of the Linux images. Local `windows.image` /
+`windows.virtio_win` files are not copied there, so with both pointing at
+local paths only the baked image counts: roughly 26 GB steady state and
+55 GB during a bake. Windows VMs already idling when a bake finishes keep
+using the previous base until they take a job — the new base applies from
+each slot's next VM — and their open overlays keep the old base's disk
+space allocated until then.
+
+Host prerequisites on top of the Linux qemu backend: OVMF firmware
+(Arch: `pacman -S edk2-ovmf`; Debian/Ubuntu: `apt install ovmf`; NixOS:
+`services.github-qemu-runner.windows.enable = true`). `setup` checks for
+it when a Windows pool is configured.
+
+Licensing: the image is Microsoft's *evaluation* edition. It is time-limited
+(180 days for Server 2025) and is not a production licence — read Microsoft's
+evaluation terms and decide whether your use is covered before enabling a
+windows pool. Each `refresh-image` bakes a fresh installation from the
+pristine download rather than ageing one in place. Set `image` to a
+different VHDX (e.g. Server 2022 eval, or your own licensed and generalised
+image with the same layout) to change the base.
+
+### Custom images
+
+A local `windows.image` may be any UEFI/GPT disk image `qemu-img` can use
+as a backing file — VHDX, qcow2 or raw; an http(s) source is downloaded and
+used as a VHDX, so a differently formatted image has to be fetched to the
+host first. Either way the image must be **generalised** (sysprepped, OOBE
+pending): the
+bake boots it with the seed CD's `Unattend.xml`, which completes setup
+unattended and runs `bake.ps1` (virtio drivers, Git, the toolchain, the
+runner). An image
+captured mid-session, or one that has already been through OOBE, never
+reaches the sentinel and the bake fails.
+
+A local path must be readable by the service user and outside the trees the
+units replace: `/home`, `/root` and `/run/user` (`ProtectHome=yes`) and
+`/tmp`, `/var/tmp` (`PrivateTmp=yes`). The service sees those empty even
+when the operator can read the file, so put the image somewhere like
+`/srv` or `/var/lib`. `setup` warns about such a path instead of failing,
+since it runs as you. Local files are used in place, so `paths.images`
+holds only the baked `base-windows.qcow2`; pin `windows.image_sha256` if
+you want the file verified on every bake.
+
+The backing format follows the file: `.vhdx` → `vhdx`, `.vhd` → `vpc`,
+`.qcow2` → `qcow2`, `.img`/`.raw` → `raw`, anything else is probed with
+`qemu-img info`. An http(s) source is always treated as a VHDX. Name the
+file for what it contains — a qcow2 called `disk.img` would be handed to
+`qemu-img` as raw.
+
+Supplying your own licensed image also removes the evaluation-edition
+caveats above: nothing is time-limited and no evaluation terms apply.
+
 ## Requirements
 
 - Linux host with `/dev/kvm`, systemd
 - `qemu-system-x86_64`, `qemu-img`, `genisoimage` on PATH
   (Arch: `pacman -S qemu-base cdrtools`; Debian/Ubuntu: `apt install qemu-system-x86 qemu-utils genisoimage`)
+- OVMF firmware for windows pools (see "Windows pools")
 - A GitHub App with **Self-hosted runners: Read & write** (org) and/or
   **Administration: Read & write** (repo), installed on the target org/repos
 
@@ -193,10 +354,18 @@ pools:
 | Key | Required | Default | Notes |
 |---|---|---|---|
 | `state_dir` | no | `/var/lib/github-qemu-runner` | Base for the default `paths.*` directories; also holds anything outside the configurable paths |
-| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`. Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
+| `paths.images` | no | `<state_dir>/images` | Absolute path. Holds `base.qcow2`, `base.json`, the cloud image download, the bake working dir, and `docker-base.json`; with a windows pool also `base-windows.qcow2`, `base-windows.json`, and the cached `windows-base.vhdx` (+ its `.meta` validator sidecar) and `virtio-win.iso` downloads (only for http(s) sources — a local `windows.image`/`windows.virtio_win` is read where it lies). Operator must create + chown to the runner user when outside `<state_dir>` (systemd `StateDirectory=` does not cover it) |
 | `paths.run` | no | `<state_dir>/run` | Absolute path. Holds per-VM workdirs (QEMU) and jit-config mount staging (Docker). Same ownership caveat as `paths.images` |
 | `docker.runtime` | no | `runsc` | Runtime for docker-backend job containers: `runsc` (gVisor) or `runc` (no sandbox — read the Docker backend section first) |
 | `images.auto_refresh` | no | `true` | When the controller starts and a required image is missing, bake it instead of failing. Set `false` to restore fail-fast (`refresh-image` must be run manually first) |
+| `windows.image` | no | `https://go.microsoft.com/fwlink/?linkid=2345826` | Windows base image (Server 2025 evaluation VHDX). http(s) URL or absolute path; local files are used in place, never copied — see "Windows pools" |
+| `windows.image_sha256` | no | | Checksum-verifies the image when set (an http(s) source without it falls back to conditional ETag caching; a local one is then used unverified) |
+| `windows.virtio_win` | no | `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso` | virtio-win driver ISO installed during the Windows bake. http(s) URL or absolute path; local files are used in place, never copied |
+| `windows.virtio_win_sha256` | no | | Checksum-verifies the virtio-win ISO when set |
+| `windows.ovmf_dir` | no | auto-detected | Absolute path holding `OVMF_CODE*.fd`/`OVMF_VARS*.fd`; auto-detection tries `/usr/share/edk2/x64`, `/usr/share/OVMF`, `/usr/share/edk2-ovmf/x64` — see "Windows pools" |
+| `windows.packages` | no | `[Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip, LLVM.LLVM]` | WinGet package IDs baked into the Windows image; `[]` installs none. Installed machine-wide when the manifest offers a machine-scope installer, otherwise with the installer's default scope, which may leave the tool in the bake user's profile where jobs cannot see it — see "Windows pools" |
+| `windows.build_tools` | no | `true` | Bake VS 2022 Build Tools (C++ workload) and the Windows 11 SDK |
+| `windows.disable_defender` | no | `true` | Apply the GitHub-hosted image's Defender posture (scanning off, `C:\` excluded); `false` leaves Defender at its defaults |
 
 ### Pools
 
@@ -207,6 +376,7 @@ at a time, forever. Labels may overlap across pools.
 |---|---|---|---|
 | `name` | yes | | Lowercase alphanumeric + hyphens, max 20 chars; feeds runner/VM names (`ghq-<pool>-<id>`) |
 | `backend` | no | `qemu` | `qemu` or `docker` |
+| `os` | no | `linux` | `linux` or `windows`; qemu backend only — see "Windows pools" |
 | `isolation` | no | `gvisor` | Docker pools only: `gvisor` (default) or `seccomp` |
 | `seccomp_profile` | no | | Seccomp pools only: optional absolute path to a custom seccomp profile |
 | `scope` | yes | | `org` or `repo` |
@@ -214,8 +384,8 @@ at a time, forever. Labels may overlap across pools.
 | `repo` | with `scope: repo` | | `owner/name` |
 | `count` | yes | | Concurrent slots, ≥ 1 |
 | `cpus` | yes | | vCPUs per VM, ≥ 1 |
-| `memory_mb` | yes | | RAM per VM, ≥ 256 |
-| `disk_gb` | yes | | Disk per VM, ≥ 10; advisory (not enforced) on docker pools |
+| `memory_mb` | yes | | RAM per VM, ≥ 256 (≥ 2048 on windows pools) |
+| `disk_gb` | yes | | Disk per VM, ≥ 10; advisory (not enforced) on docker pools. The base image's virtual size is the floor — 64 GiB on windows pools, so smaller values have no effect |
 | `labels` | yes | | At least one; runners are targeted by `runs-on` matching all labels |
 | `runner_group` | no | `Default` | Org-scoped pools only — see below |
 | `liveness_timeout` | no | `5m` | How long a freshly booted runner may take to show up online before the slot is torn down and recycled |
@@ -266,7 +436,7 @@ github-qemu-runner [-config PATH] <controller|refresh-image|setup>
 | Command | What it does |
 |---|---|
 | `setup` | Preflight: config parses, binaries on PATH, `/dev/kvm` (or docker + runsc) usable, App key parses and authenticates, base image present, capacity warnings. All lines `ok` → ready |
-| `refresh-image` | Bakes (or re-bakes) the base images for whichever backends the pools use. Run after install and then periodically |
+| `refresh-image` | Bakes (or re-bakes) the base images for whichever backends the pools use, including the Windows base when a windows pool exists. Run after install and then periodically |
 | `controller` | Runs the pools (the systemd service; also the default when no command is given) |
 
 ## Scheduled image refresh
@@ -432,15 +602,17 @@ runners.
 | Per-VM console | `<paths.run>/<vm>/console.log` (gone after teardown); defaults to `/var/lib/github-qemu-runner/run/<vm>/console.log` |
 | Refresh base image | `sudo -u gh-runner github-qemu-runner refresh-image` (monthly, or after runner/Ubuntu releases; running VMs are unaffected, new VMs pick it up) |
 | Scheduled refresh | enable `github-qemu-runner-refresh.timer` (off by default; weekly) — see "Scheduled image refresh" |
-| Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
+| Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/base-windows.json` (windows), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
 | Stop (drains) | `systemctl stop github-qemu-runner` — idle runners are deregistered immediately; busy ones get `drain_timeout` (default 30 min) to finish |
 | Crash recovery | automatic: systemd restarts; startup reaping kills orphan VMs and deletes stale `ghq-*` runner records |
 
 ## Security notes
 
-- The VM is the isolation boundary; the guest `runner` user has no sudo
-  (Docker group membership is the same documented trade-off as
-  GitHub-hosted runners).
+- The VM is the isolation boundary; on Linux pools the guest `runner` user
+  has no sudo (Docker group membership is the same documented trade-off as
+  GitHub-hosted runners). On **windows** pools `runner` *is* a local
+  Administrator, matching GitHub-hosted Windows runners — so in-guest
+  privilege separation buys nothing there and the VM is the only boundary.
 - Outbound-only user-mode networking; nothing can connect into a guest.
 - JIT configs are single-use and bound to one pre-created runner record;
   they exist on disk only inside a per-VM seed ISO (0600) that is deleted

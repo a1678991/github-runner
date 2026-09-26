@@ -29,6 +29,24 @@ github:
 #docker:
 #  runtime: runsc        # runsc (default) | runc (NO sandbox — read README first)
 
+# Windows pools (os: windows on qemu pools) boot a baked copy of the
+# Windows Server evaluation image. All keys optional; see "Windows pools"
+# in the README for host prerequisites (OVMF) and licensing notes.
+# image and virtio_win each take an http(s) URL (downloaded and cached
+# under paths.images) or an absolute path to a file on this host, which is
+# used in place and never copied — it must be readable by the service user
+# and outside the trees the units replace: /home, /root, /run/user
+# (ProtectHome=yes) and /tmp, /var/tmp (PrivateTmp=yes).
+#windows:
+#  image: https://go.microsoft.com/fwlink/?linkid=2345826   # Server 2025 eval VHDX
+#  image_sha256: ""          # verify the image when set (Microsoft publishes no checksum)
+#  virtio_win: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso
+#  virtio_win_sha256: ""
+#  ovmf_dir: /usr/share/edk2/x64   # auto-detected when unset
+#  packages: [Microsoft.PowerShell, GitHub.cli, jqlang.jq, 7zip.7zip, LLVM.LLVM]  # WinGet IDs baked in; [] for none
+#  build_tools: true         # VS 2022 Build Tools (C++) + Windows 11 SDK
+#  disable_defender: true    # GitHub-hosted-image Defender posture; false leaves Defender at its defaults
+
 pools:
   - name: fmt
     scope: org # org | repo (repo also needs `repo: owner/name`)
@@ -52,6 +70,15 @@ pools:
     memory_mb: 16384
     disk_gb: 60
     labels: [self-hosted, linux, x64, build]
+  #- name: win
+  #  os: windows         # linux (default) | windows; qemu backend only
+  #  scope: org
+  #  org: my-org
+  #  count: 1
+  #  cpus: 4
+  #  memory_mb: 8192     # windows pools: >= 2048
+  #  disk_gb: 80         # floor is the image's 64 GiB virtual size
+  #  labels: [self-hosted, windows, x64]
   #- name: oci-arm
   #  backend: docker     # qemu (default) | docker
   #  isolation: gvisor   # gvisor (default; Docker-in-Docker via runsc) | seccomp

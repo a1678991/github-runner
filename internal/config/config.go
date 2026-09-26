@@ -12,6 +12,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// DefaultWindowsImage is Microsoft's evaluation-center link for the
+	// Windows Server 2025 evaluation VHDX (English, x64). It redirects to
+	// a versioned file on software-static.download.prss.microsoft.com.
+	DefaultWindowsImage = "https://go.microsoft.com/fwlink/?linkid=2345826"
+	// DefaultVirtioWin pins a versioned https URL: the unversioned
+	// stable-virtio alias redirects through plain http.
+	DefaultVirtioWin = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso"
+)
+
+// DefaultWindowsPackages are the WinGet packages baked into the Windows
+// image when windows.packages is absent: the everyday CLI tools GitHub's
+// windows-2025 hosted image puts on PATH, plus its LLVM C/C++ toolchain
+// (clang, lld-link).
+var DefaultWindowsPackages = []string{
+	"Microsoft.PowerShell",
+	"GitHub.cli",
+	"jqlang.jq",
+	"7zip.7zip",
+	"LLVM.LLVM",
+}
+
+// wingetIDRe matches WinGet package identifiers (e.g. "Microsoft.VCRedist.2015+.x64").
+var wingetIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
+
 // Duration wraps time.Duration to accept "5m"-style YAML strings.
 type Duration time.Duration
 
@@ -29,12 +54,13 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	GitHub   GitHub `yaml:"github"`
-	StateDir string `yaml:"state_dir"`
-	Paths    Paths  `yaml:"paths"`
-	Images   Images `yaml:"images"`
-	Docker   Docker `yaml:"docker"`
-	Pools    []Pool `yaml:"pools"`
+	GitHub   GitHub  `yaml:"github"`
+	StateDir string  `yaml:"state_dir"`
+	Paths    Paths   `yaml:"paths"`
+	Images   Images  `yaml:"images"`
+	Docker   Docker  `yaml:"docker"`
+	Windows  Windows `yaml:"windows"`
+	Pools    []Pool  `yaml:"pools"`
 }
 
 // Paths overrides the default per-concern subdirectories under StateDir.
@@ -72,9 +98,37 @@ type Docker struct {
 	Runtime string `yaml:"runtime"`
 }
 
+// Windows configures the base image for os: windows pools.
+type Windows struct {
+	// Image and VirtioWin each take an http(s) URL (downloaded and cached
+	// under Paths.Images) or an absolute path to a local file (used in
+	// place, never copied). See IsLocalSource.
+	Image           string `yaml:"image"`
+	ImageSHA256     string `yaml:"image_sha256"`
+	VirtioWin       string `yaml:"virtio_win"`
+	VirtioWinSHA256 string `yaml:"virtio_win_sha256"`
+	// OVMFDir holds OVMF_CODE*.fd and OVMF_VARS*.fd. Empty means
+	// auto-detect (see ResolveOVMF).
+	OVMFDir string `yaml:"ovmf_dir"`
+	// Packages are WinGet package IDs installed machine-wide in the base
+	// image. Absent (or null) means DefaultWindowsPackages; an explicit
+	// empty list installs none.
+	Packages []string `yaml:"packages"`
+	// BuildTools bakes Visual Studio 2022 Build Tools (VCTools workload)
+	// and the Windows 11 SDK. Pointer so an absent key defaults to true.
+	BuildTools *bool `yaml:"build_tools"`
+	// DisableDefender applies the GitHub-hosted image's Defender
+	// preferences (real-time and related scanning off, C:\ excluded).
+	// Pointer so an absent key defaults to true.
+	DisableDefender *bool `yaml:"disable_defender"`
+}
+
 type Pool struct {
 	Name    string `yaml:"name"`
 	Backend string `yaml:"backend"`
+	// OS selects the guest for qemu pools: "linux" (default) or
+	// "windows". Docker pools are always linux.
+	OS string `yaml:"os"`
 	// Isolation selects the sandbox for docker pools: "gvisor" (default;
 	// runsc + --privileged, full Docker-in-job) or "seccomp" (native runc,
 	// no --privileged, Docker's default seccomp profile; no Docker inside
@@ -109,6 +163,8 @@ func (p Pool) APIPrefix() string {
 // Pool names feed VM and runner names (ghq-<pool>-<id>); keep them short
 // and DNS-ish.
 var poolNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,19}$`)
+
+var sha256Re = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -153,10 +209,39 @@ func (c *Config) applyDefaults() {
 	if c.Docker.Runtime == "" {
 		c.Docker.Runtime = "runsc"
 	}
+	// Expanded like OVMFDir, so a local image can be pointed at with
+	// ${STATE_DIRECTORY}/... or another unit-provided variable.
+	c.Windows.Image = os.ExpandEnv(c.Windows.Image)
+	c.Windows.VirtioWin = os.ExpandEnv(c.Windows.VirtioWin)
+	if c.Windows.Image == "" {
+		c.Windows.Image = DefaultWindowsImage
+	}
+	if c.Windows.VirtioWin == "" {
+		c.Windows.VirtioWin = DefaultVirtioWin
+	}
+	// Digests are compared against lowercase hex (hex.EncodeToString),
+	// but Microsoft publishes evaluation-media SHA256 digests in uppercase.
+	c.Windows.ImageSHA256 = strings.ToLower(c.Windows.ImageSHA256)
+	c.Windows.VirtioWinSHA256 = strings.ToLower(c.Windows.VirtioWinSHA256)
+	c.Windows.OVMFDir = os.ExpandEnv(c.Windows.OVMFDir)
+	if c.Windows.Packages == nil {
+		c.Windows.Packages = append([]string(nil), DefaultWindowsPackages...)
+	}
+	if c.Windows.BuildTools == nil {
+		on := true
+		c.Windows.BuildTools = &on
+	}
+	if c.Windows.DisableDefender == nil {
+		on := true
+		c.Windows.DisableDefender = &on
+	}
 	for i := range c.Pools {
 		p := &c.Pools[i]
 		if p.Backend == "" {
 			p.Backend = "qemu"
+		}
+		if p.OS == "" {
+			p.OS = "linux"
 		}
 		if p.Backend == "docker" && p.Isolation == "" {
 			p.Isolation = "gvisor"
@@ -195,6 +280,36 @@ func (c *Config) validate() error {
 	if !filepath.IsAbs(c.Paths.Run) {
 		return fmt.Errorf("paths.run must be an absolute path")
 	}
+	if c.Windows.OVMFDir != "" && !filepath.IsAbs(c.Windows.OVMFDir) {
+		return fmt.Errorf("windows.ovmf_dir must be an absolute path")
+	}
+	for _, s := range []struct{ key, val string }{
+		{"windows.image_sha256", c.Windows.ImageSHA256},
+		{"windows.virtio_win_sha256", c.Windows.VirtioWinSHA256},
+	} {
+		if s.val != "" && !sha256Re.MatchString(s.val) {
+			return fmt.Errorf("%s must be 64 hex characters", s.key)
+		}
+	}
+	for _, s := range []struct{ key, val string }{
+		{"windows.image", c.Windows.Image},
+		{"windows.virtio_win", c.Windows.VirtioWin},
+	} {
+		if err := validateSource(s.key, s.val); err != nil {
+			return err
+		}
+	}
+	seenPkg := map[string]bool{}
+	for _, id := range c.Windows.Packages {
+		if !wingetIDRe.MatchString(id) {
+			return fmt.Errorf("windows.packages: %q is not a WinGet package ID", id)
+		}
+		// WinGet IDs are case-insensitive.
+		if seenPkg[strings.ToLower(id)] {
+			return fmt.Errorf("windows.packages: %q is listed twice", id)
+		}
+		seenPkg[strings.ToLower(id)] = true
+	}
 	seen := map[string]bool{}
 	for _, p := range c.Pools {
 		if !poolNameRe.MatchString(p.Name) {
@@ -206,6 +321,12 @@ func (c *Config) validate() error {
 		seen[p.Name] = true
 		if p.Backend != "qemu" && p.Backend != "docker" {
 			return fmt.Errorf(`pool %s: backend must be "qemu" or "docker"`, p.Name)
+		}
+		if p.OS != "linux" && p.OS != "windows" {
+			return fmt.Errorf(`pool %s: os must be "linux" or "windows"`, p.Name)
+		}
+		if p.OS == "windows" && p.Backend != "qemu" {
+			return fmt.Errorf("pool %s: os: windows requires backend: qemu", p.Name)
 		}
 		if p.Backend == "docker" {
 			if p.Isolation != "gvisor" && p.Isolation != "seccomp" {
@@ -244,8 +365,12 @@ func (c *Config) validate() error {
 		if p.CPUs < 1 {
 			return fmt.Errorf("pool %s: cpus must be >= 1", p.Name)
 		}
-		if p.MemoryMB < 256 {
-			return fmt.Errorf("pool %s: memory_mb must be >= 256", p.Name)
+		minMem := 256
+		if p.OS == "windows" {
+			minMem = 2048
+		}
+		if p.MemoryMB < minMem {
+			return fmt.Errorf("pool %s: memory_mb must be >= %d", p.Name, minMem)
 		}
 		if p.DiskGB < 10 {
 			return fmt.Errorf("pool %s: disk_gb must be >= 10", p.Name)
@@ -296,6 +421,17 @@ func (c *Config) HasBackend(b string) bool {
 func (c *Config) HasDockerIsolation(mode string) bool {
 	for _, p := range c.Pools {
 		if p.Backend == "docker" && p.Isolation == mode {
+			return true
+		}
+	}
+	return false
+}
+
+// HasQEMUOS reports whether any qemu pool runs the given guest OS
+// ("linux" or "windows").
+func (c *Config) HasQEMUOS(os string) bool {
+	for _, p := range c.Pools {
+		if p.Backend == "qemu" && p.OS == os {
 			return true
 		}
 	}

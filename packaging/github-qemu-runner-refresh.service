@@ -12,7 +12,11 @@ SupplementaryGroups=kvm
 ExecStart=/usr/local/bin/github-qemu-runner -config /etc/github-qemu-runner/config.yaml refresh-image
 # A bake (cloud-image download + VM boot, or a docker build) far exceeds
 # systemd's 90s default start timeout, which would otherwise kill it.
-TimeoutStartSec=30min
+# 3h covers the worst case: the Linux bake runs first, then a windows pool
+# adds an 11 GB evaluation-VHDX download (whenever Microsoft rotates the
+# image and the ETag misses), a bake VM with its own 30-minute timeout, and
+# a qemu-img convert of a 64 GiB image.
+TimeoutStartSec=3h
 
 # Hardening mirrors github-qemu-runner.service. No LoadCredential: the
 # image bake hits only public GitHub release / cloud-image endpoints and

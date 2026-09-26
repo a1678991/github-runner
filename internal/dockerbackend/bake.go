@@ -56,7 +56,7 @@ func Bake(ctx context.Context, o BakeOptions) error {
 			return fmt.Errorf("unknown image variant %q", v)
 		}
 	}
-	rel, err := imagebake.LatestRunner(ctx, o.HTTP, o.APIBase, RunnerArch(runtime.GOARCH))
+	rel, err := imagebake.LatestRunner(ctx, o.HTTP, o.APIBase, "linux", RunnerArch(runtime.GOARCH))
 	if err != nil {
 		return fmt.Errorf("resolve runner release: %w", err)
 	}

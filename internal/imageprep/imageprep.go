@@ -18,17 +18,22 @@ import (
 
 // imagePlan is the set of artifacts to bake.
 type imagePlan struct {
-	QEMU     bool
+	QEMU     bool     // base.qcow2 (linux qemu pools)
+	Windows  bool     // base-windows.qcow2 (windows qemu pools)
 	Variants []string // subset of {"dind","slim"}, in that order
 }
 
 // plan decides what to bake. present reports whether a given artifact is
-// already on disk: "qemu" (base.qcow2), "dind"/"slim" (docker images).
-// With force, presence is ignored and every used artifact is selected.
+// already on disk: "qemu" (base.qcow2), "windows" (base-windows.qcow2),
+// "dind"/"slim" (docker images). With force, presence is ignored and
+// every used artifact is selected.
 func plan(cfg *config.Config, force bool, present func(artifact string) bool) imagePlan {
 	var p imagePlan
-	if cfg.HasBackend("qemu") && (force || !present("qemu")) {
+	if cfg.HasQEMUOS("linux") && (force || !present("qemu")) {
 		p.QEMU = true
+	}
+	if cfg.HasQEMUOS("windows") && (force || !present("windows")) {
+		p.Windows = true
 	}
 	if cfg.HasBackend("docker") {
 		for _, v := range []struct{ name, mode string }{
@@ -67,6 +72,9 @@ func Ensure(ctx context.Context, cfg *config.Config, log *slog.Logger, force boo
 		case "qemu":
 			_, statErr := os.Stat(filepath.Join(cfg.Paths.Images, "base.qcow2"))
 			return statErr == nil
+		case "windows":
+			_, statErr := os.Stat(filepath.Join(cfg.Paths.Images, imagebake.WindowsBase))
+			return statErr == nil
 		case "dind":
 			return exec.CommandContext(ctx, dockerBin, "image", "inspect", dockerbackend.Image).Run() == nil
 		case "slim":
@@ -83,6 +91,29 @@ func Ensure(ctx context.Context, cfg *config.Config, log *slog.Logger, force boo
 			APIBase:  cfg.GitHub.APIBaseURL,
 			QEMUBin:  qemuBin,
 			Log:      log,
+		}); err != nil {
+			return err
+		}
+	}
+	if p.Windows {
+		fw, err := config.ResolveOVMF(cfg.Windows.OVMFDir)
+		if err != nil {
+			return err
+		}
+		if err := imagebake.BakeWindows(ctx, imagebake.WindowsOptions{
+			ImageDir:        cfg.Paths.Images,
+			APIBase:         cfg.GitHub.APIBaseURL,
+			Image:           cfg.Windows.Image,
+			ImageSHA256:     cfg.Windows.ImageSHA256,
+			VirtioWin:       cfg.Windows.VirtioWin,
+			VirtioWinSHA256: cfg.Windows.VirtioWinSHA256,
+			Packages:        cfg.Windows.Packages,
+			BuildTools:      *cfg.Windows.BuildTools,
+			DisableDefender: *cfg.Windows.DisableDefender,
+			OVMFCode:        fw.Code,
+			OVMFVars:        fw.Vars,
+			QEMUBin:         qemuBin,
+			Log:             log,
 		}); err != nil {
 			return err
 		}

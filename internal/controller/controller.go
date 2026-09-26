@@ -15,7 +15,9 @@ import (
 	"github.com/a1678991/github-qemu-runner/internal/config"
 	"github.com/a1678991/github-qemu-runner/internal/dockerbackend"
 	"github.com/a1678991/github-qemu-runner/internal/github"
+	"github.com/a1678991/github-qemu-runner/internal/imagebake"
 	"github.com/a1678991/github-qemu-runner/internal/pool"
+	"github.com/a1678991/github-qemu-runner/internal/qemu"
 )
 
 // Run wires everything together and blocks until ctx is cancelled and all
@@ -42,14 +44,49 @@ func Run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("qemu-system-x86_64 not found: %w", err)
 		}
-		basePath, err := filepath.Abs(filepath.Join(cfg.Paths.Images, "base.qcow2"))
-		if err != nil {
-			return err
+		qemuProv = &QEMUProvisioner{RunDir: runDir, QEMUBin: qemuBin}
+		if cfg.HasQEMUOS("linux") {
+			basePath, err := filepath.Abs(filepath.Join(cfg.Paths.Images, "base.qcow2"))
+			if err != nil {
+				return err
+			}
+			if _, err := os.Stat(basePath); err != nil {
+				return fmt.Errorf("base image missing (run `github-qemu-runner refresh-image` first): %w", err)
+			}
+			qemuProv.BasePath = basePath
 		}
-		if _, err := os.Stat(basePath); err != nil {
-			return fmt.Errorf("base image missing (run `github-qemu-runner refresh-image` first): %w", err)
+		if cfg.HasQEMUOS("windows") {
+			winPath, err := filepath.Abs(filepath.Join(cfg.Paths.Images, imagebake.WindowsBase))
+			if err != nil {
+				return err
+			}
+			if _, err := os.Stat(winPath); err != nil {
+				return fmt.Errorf("windows base image missing (run `github-qemu-runner refresh-image` first): %w", err)
+			}
+			fw, err := config.ResolveOVMF(cfg.Windows.OVMFDir)
+			if err != nil {
+				return err
+			}
+			// A local image source is only read by a bake, but fail (or
+			// warn) at startup rather than at the next auto-refresh.
+			for _, s := range []struct{ key, val string }{
+				{"windows.image", cfg.Windows.Image},
+				{"windows.virtio_win", cfg.Windows.VirtioWin},
+			} {
+				if !config.IsLocalSource(s.val) {
+					continue
+				}
+				warning, err := config.CheckLocalSource(s.val)
+				if err != nil {
+					return fmt.Errorf("%s: %w", s.key, err)
+				}
+				if warning != "" {
+					log.Warn(warning)
+				}
+			}
+			qemuProv.WindowsBasePath = winPath
+			qemuProv.Firmware = &qemu.Firmware{Code: fw.Code, Vars: fw.Vars}
 		}
-		qemuProv = &QEMUProvisioner{RunDir: runDir, BasePath: basePath, QEMUBin: qemuBin}
 	}
 
 	var dockerProv *dockerbackend.Provisioner

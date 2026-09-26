@@ -30,3 +30,6 @@ packaging/deb/dist/
 
 # mise
 mise.local.*
+
+# agent config (local)
+.claude/settings.local.json

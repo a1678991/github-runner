@@ -1,6 +1,6 @@
 // Command github-qemu-runner runs ephemeral GitHub Actions runners in
-// QEMU/KVM virtual machines or sandboxed Docker containers (per-pool
-// gvisor or seccomp isolation):
+// QEMU/KVM virtual machines (Linux or Windows guests) or sandboxed
+// Docker containers (per-pool gvisor or seccomp isolation):
 // `controller` supervises runner pools, `refresh-image` (re)bakes the
 // base VM image and/or runner container image, `setup` runs preflight
 // checks. See packaging/config.example.yaml for configuration.
@@ -23,6 +23,7 @@ import (
 	"github.com/a1678991/github-qemu-runner/internal/controller"
 	"github.com/a1678991/github-qemu-runner/internal/dockerbackend"
 	"github.com/a1678991/github-qemu-runner/internal/github"
+	"github.com/a1678991/github-qemu-runner/internal/imagebake"
 	"github.com/a1678991/github-qemu-runner/internal/imageprep"
 )
 
@@ -104,6 +105,29 @@ func runSetup(ctx context.Context, configPath string) error {
 			_ = kvm.Close()
 		}
 		check("/dev/kvm read-write access", err)
+
+		if cfg.HasQEMUOS("windows") {
+			fw, err := config.ResolveOVMF(cfg.Windows.OVMFDir)
+			check("OVMF firmware (windows pools)", err)
+			if err == nil {
+				fmt.Printf("ok    OVMF code %s\n", fw.Code)
+			}
+			// http(s) sources are checked by the bake itself; a local
+			// file must be there now, and readable by the service.
+			for _, s := range []struct{ what, val string }{
+				{"windows image", cfg.Windows.Image},
+				{"virtio-win ISO", cfg.Windows.VirtioWin},
+			} {
+				if !config.IsLocalSource(s.val) {
+					continue
+				}
+				warning, srcErr := config.CheckLocalSource(s.val)
+				check(s.what+" "+s.val, srcErr)
+				if warning != "" {
+					fmt.Printf("warn  %s\n", warning)
+				}
+			}
+		}
 	}
 
 	if cfg.HasBackend("docker") {
@@ -159,12 +183,20 @@ func runSetup(ctx context.Context, configPath string) error {
 		}
 	}
 
-	if cfg.HasBackend("qemu") {
+	if cfg.HasQEMUOS("linux") {
 		base := filepath.Join(cfg.Paths.Images, "base.qcow2")
 		if _, err := os.Stat(base); err != nil {
 			fmt.Printf("note  base image missing; run `github-qemu-runner refresh-image`\n")
 		} else {
 			fmt.Printf("ok    base image %s\n", base)
+		}
+	}
+	if cfg.HasQEMUOS("windows") {
+		base := filepath.Join(cfg.Paths.Images, imagebake.WindowsBase)
+		if _, err := os.Stat(base); err != nil {
+			fmt.Printf("note  windows base image missing; run `github-qemu-runner refresh-image`\n")
+		} else {
+			fmt.Printf("ok    windows base image %s\n", base)
 		}
 	}
 
