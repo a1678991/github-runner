@@ -441,6 +441,10 @@ github-qemu-runner [-config PATH] <controller|refresh-image|setup>
 
 ## Scheduled image refresh
 
+The default Ubuntu 24.04 QEMU image also includes native packages for
+[Linux Tauri builds and Chromium E2E](docs/linux-desktop-builds.md). That guide
+lists the baked packages, remaining toolchain setup, and image update procedure.
+
 `images.auto_refresh` only bakes images that are *missing* at controller
 start. To keep images current (new actions/runner or Ubuntu releases),
 enable the bundled timer — shipped by the Arch/Debian packages (and the
