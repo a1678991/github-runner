@@ -522,7 +522,10 @@ try {
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\ghq\run-one-job.ps1'
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User 'runner'
         $principal = New-ScheduledTaskPrincipal -UserId 'runner' -LogonType Interactive -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Days 3) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        # No time limit (PT0S): the VM idles until a job arrives, however long
+        # that takes. Stopping the task kills run-one-job.ps1 before its finally
+        # powers the guest off, leaving a VM with no runner holding the slot.
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
         Register-ScheduledTask -TaskName 'ghq-run-one-job' -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
         Log 'scheduled task registered'
 
