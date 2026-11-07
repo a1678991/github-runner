@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -33,6 +34,12 @@ func (f *fakeAPI) setGetErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getErr = err
+}
+
+func (f *fakeAPI) setRunner(status string, busy bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status, f.busy = status, busy
 }
 
 func (f *fakeAPI) GetRunner(context.Context, string, int64) (*github.Runner, error) {
@@ -117,9 +124,19 @@ func testPool(api *fakeAPI, prov *fakeProv) *Pool {
 			DrainTimeout:    config.Duration(200 * time.Millisecond),
 		},
 		GH: api, Prov: prov,
-		Log:          slog.New(slog.DiscardHandler),
-		PollInterval: 10 * time.Millisecond,
+		Log:            slog.New(slog.DiscardHandler),
+		PollInterval:   10 * time.Millisecond,
+		HealthInterval: 10 * time.Millisecond,
+		HealthGrace:    100 * time.Millisecond,
 	}
+}
+
+// startPastGate runs runOne and returns once it has passed the liveness gate.
+func startPastGate(ctx context.Context, p *Pool) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- p.runOne(ctx, 0) }()
+	time.Sleep(50 * time.Millisecond)
+	return done
 }
 
 func TestRunOneHappyPath(t *testing.T) {
@@ -152,6 +169,87 @@ func TestRunOneLivenessTimeout(t *testing.T) {
 	}
 	if len(api.deletedIDs()) != 1 {
 		t.Error("runner record not deleted")
+	}
+}
+
+func TestLostRunnerKillsVM(t *testing.T) {
+	notFound := fmt.Errorf("GET runner: %w", github.ErrNotFound)
+	for name, lose := range map[string]func(*fakeAPI){
+		"record deleted": func(a *fakeAPI) { a.setGetErr(notFound) },
+		"offline idle":   func(a *fakeAPI) { a.setRunner("offline", false) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeAPI{status: "online"}
+			vm := newFakeVM() // alive with no runner: never exits on its own
+			done := startPastGate(context.Background(), testPool(api, &fakeProv{vm: vm}))
+			lose(api)
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "runner lost") {
+					t.Fatalf("err = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("slot stayed held by a VM with no runner")
+			}
+			if !vm.wasKilled() {
+				t.Error("VM was not killed")
+			}
+			if len(api.deletedIDs()) != 1 {
+				t.Error("runner record not deleted")
+			}
+		})
+	}
+}
+
+// Every case here must leave the VM running well past HealthGrace.
+func TestHealthCheckKeepsVM(t *testing.T) {
+	for name, tc := range map[string]struct {
+		during func(*fakeAPI)
+		wait   time.Duration
+		after  func(*fakeAPI)
+		grace  time.Duration
+	}{
+		// A wedged busy runner is still caught: GitHub eventually clears
+		// busy or removes the record.
+		"offline busy": {
+			during: func(a *fakeAPI) { a.setRunner("offline", true) },
+			wait:   400 * time.Millisecond,
+		},
+		// Says nothing about the runner.
+		"API errors": {
+			during: func(a *fakeAPI) { a.setGetErr(errors.New("github is down")) },
+			wait:   400 * time.Millisecond,
+		},
+		// Coming back online restarts the grace period.
+		"brief outage": {
+			during: func(a *fakeAPI) { a.setRunner("offline", false) },
+			wait:   20 * time.Millisecond,
+			after:  func(a *fakeAPI) { a.setRunner("online", false) },
+			grace:  time.Second, // outlasts a slow CI scheduler
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeAPI{status: "online"}
+			vm := newFakeVM()
+			p := testPool(api, &fakeProv{vm: vm})
+			if tc.grace != 0 {
+				p.HealthGrace = tc.grace
+			}
+			done := startPastGate(context.Background(), p)
+			tc.during(api)
+			time.Sleep(tc.wait)
+			if tc.after != nil {
+				tc.after(api)
+				time.Sleep(p.HealthGrace + 100*time.Millisecond)
+			}
+			if vm.wasKilled() {
+				t.Fatal("healthy VM was killed")
+			}
+			vm.exit()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -249,6 +347,25 @@ func TestDrainTreatsAPIErrorAsBusy(t *testing.T) {
 	// idle path's pre-powerdown delete (which would make it 2).
 	if got := api.deletedIDs(); len(got) != 1 {
 		t.Errorf("deleted %d times, want 1 (busy path)", len(got))
+	}
+}
+
+func TestDrainSkipsWaitWhenRunnerMissing(t *testing.T) {
+	api := &fakeAPI{status: "online"}
+	vm := newFakeVM()
+	p := testPool(api, &fakeProv{vm: vm})
+	p.Cfg.DrainTimeout = config.Duration(time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := startPastGate(ctx, p)
+	api.setGetErr(fmt.Errorf("GET runner: %w", github.ErrNotFound))
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain waited for a runner that no longer exists")
+	}
+	if !vm.wasPowered() {
+		t.Error("VM not powered down")
 	}
 }
 

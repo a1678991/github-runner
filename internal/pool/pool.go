@@ -1,6 +1,7 @@
 // Package pool supervises a fixed number of ephemeral-runner slots. Each
 // slot loops: JIT-register -> provision VM -> liveness gate -> wait for the
-// VM to power itself off -> teardown -> repeat.
+// VM to power itself off, replacing it if its runner is lost -> teardown ->
+// repeat.
 package pool
 
 import (
@@ -48,6 +49,13 @@ type Pool struct {
 
 	// PollInterval for the liveness gate; defaults to 10s. Tests shrink it.
 	PollInterval time.Duration
+	// HealthInterval is how often an online runner is checked; defaults to
+	// 2m, slow because every VM in every pool spends API quota on it.
+	HealthInterval time.Duration
+	// HealthGrace is how long a runner may stay lost before its VM is
+	// replaced; defaults to 15m, long enough for a VM to power off after a job
+	// and for the runner to ride out a network or GitHub outage.
+	HealthGrace time.Duration
 }
 
 // Run blocks until ctx is cancelled and all slots have drained. The desired
@@ -132,18 +140,64 @@ func (p *Pool) runOne(ctx context.Context, slot int) error {
 	}
 	log.Info("runner online")
 
-	select {
-	case <-vm.Done():
-		if vmErr := vm.Err(); vmErr != nil {
-			log.Warn("VM exited with error", "err", vmErr, "console_tail", vm.ConsoleTail())
-		} else {
-			log.Info("VM exited")
-		}
-		return nil
-	case <-ctx.Done():
-		p.drain(vm, prefix, jit.Runner.ID, log)
-		return nil
+	interval := p.HealthInterval
+	if interval == 0 {
+		interval = 2 * time.Minute
 	}
+	grace := p.HealthGrace
+	if grace == 0 {
+		grace = 15 * time.Minute
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	var lostSince time.Time
+	for {
+		select {
+		case <-vm.Done():
+			if vmErr := vm.Err(); vmErr != nil {
+				log.Warn("VM exited with error", "err", vmErr, "console_tail", vm.ConsoleTail())
+			} else {
+				log.Info("VM exited")
+			}
+			return nil
+		case <-ctx.Done():
+			p.drain(vm, prefix, jit.Runner.ID, log)
+			return nil
+		case <-tick.C:
+			lost, err := p.runnerLost(ctx, prefix, jit.Runner.ID)
+			if err != nil {
+				continue // transient API failure says nothing about the runner
+			}
+			if !lost {
+				lostSince = time.Time{}
+				continue
+			}
+			if lostSince.IsZero() {
+				lostSince = time.Now()
+			}
+			if time.Since(lostSince) >= grace {
+				log.Warn("runner lost; killing VM", "console_tail", vm.ConsoleTail())
+				_ = vm.Kill()
+				return fmt.Errorf("runner lost: missing or offline for %v", grace)
+			}
+		}
+	}
+}
+
+// runnerLost reports whether a runner that came online can no longer take a
+// job. Only the guest powers a VM off, so a guest that loses its runner without
+// powering off would otherwise hold the slot forever. A busy runner is left
+// alone so a network outage does not kill its job; if it is truly gone, GitHub
+// eventually clears busy or removes the record.
+func (p *Pool) runnerLost(ctx context.Context, prefix string, id int64) (bool, error) {
+	r, err := p.GH.GetRunner(ctx, prefix, id)
+	if errors.Is(err, github.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return r.Status != "online" && !r.Busy, nil
 }
 
 // awaitOnline is the liveness gate: a guest that wedges before the runner
@@ -185,6 +239,12 @@ func (p *Pool) drain(vm VM, prefix string, id int64, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r, err := p.GH.GetRunner(ctx, prefix, id)
+	if errors.Is(err, github.ErrNotFound) {
+		// No record means no job can be running or land on this VM.
+		log.Info("draining VM with no runner record")
+		_ = vm.Powerdown(30 * time.Second)
+		return
+	}
 	// Unknown state (API error at shutdown) gets the busy-grace treatment:
 	// a 30-minute wait on an idle runner is cheaper than killing a job.
 	busy := err != nil || r.Busy

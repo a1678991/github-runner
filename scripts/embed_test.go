@@ -84,6 +84,12 @@ func TestWindowsAssetsEmbedded(t *testing.T) {
 			t.Errorf("run-one-job.ps1 missing %q", want)
 		}
 	}
+	// An idle job VM waits for a job for as long as it takes. A task time limit
+	// kills run-one-job.ps1 before its finally can power the guest off, which
+	// disconnects the runner and strands the VM, so the slot stops taking jobs.
+	if !strings.Contains(WindowsBake, "-ExecutionTimeLimit (New-TimeSpan -Seconds 0)") {
+		t.Error("bake.ps1: the ghq-run-one-job task must have no execution time limit (PT0S)")
+	}
 	// Host-side teardown waits on the qemu process, so the power-off must be
 	// unconditional: the serial port is constructed inside the try whose
 	// finally runs Stop-Computer -Force, never before it.

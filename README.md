@@ -609,6 +609,8 @@ runners.
 | Image provenance | `<paths.images>/base.json` (qemu), `<paths.images>/base-windows.json` (windows), `<paths.images>/docker-base.json` (docker); defaults to `/var/lib/github-qemu-runner/images/` |
 | Stop (drains) | `systemctl stop github-qemu-runner` — idle runners are deregistered immediately; busy ones get `drain_timeout` (default 30 min) to finish |
 | Crash recovery | automatic: systemd restarts; startup reaping kills orphan VMs and deletes stale `ghq-*` runner records |
+| Lost runner | automatic: a VM whose runner stays missing, or offline and idle, for 15 minutes is killed and replaced (`runner lost` in the journal) |
+| Inspect a Windows VM | it has no remote shell; run these on the host: `tools/qmp-screendump.py` captures the desktop, `tools/win-guest-fs.sh` runs a command against a read-only mount of `C:` (runner logs are in `actions-runner\_diag`) |
 
 ## Security notes
 
